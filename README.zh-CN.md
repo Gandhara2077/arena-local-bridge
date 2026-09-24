@@ -118,7 +118,6 @@ bin/        登录、Session、验证和诊断辅助工具
 test/       Node.js 测试套件
 prompts/    可选安装 Prompt
 assets/     公共项目资源
-docs/       公共文档
 ~~~
 
 ## 模型识别

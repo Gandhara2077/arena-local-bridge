@@ -118,7 +118,6 @@ bin/        Login, session, verification and diagnostic helpers
 test/       Node.js test suite
 prompts/    Optional installation prompts
 assets/     Public project assets
-docs/       Public documentation
 ~~~
 
 ## Model identification
