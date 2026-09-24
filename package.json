@@ -16,7 +16,7 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.63.0"
