@@ -242,10 +242,10 @@ source it used (`workspaceFrom: request-header | codex-session | codex-recent | 
 > to "no workspace" rather than a wrong one, and `ARENA_MCP_WORKSPACE` / the request header remain
 > the stable paths. Set `ARENA_CODEX_SESSIONS_DIR` if Codex stores its data elsewhere.
 
-Note that a local proxy between the client and this bridge can drop custom headers entirely — that
-is the case on the machine this was written for, where the client talks to the bridge through
-`EasyCLIProxyAPI`. If a header you configured never shows up, check the bridge's `workspace hints`
-log line, which reports the `x-*` headers that actually arrived.
+Note that a local proxy between the client and this bridge can drop custom headers entirely. If a
+header you configured never shows up, check the bridge's `workspace hints` log line, which reports
+the `x-*` headers that actually arrived. When using a proxy or gateway, make sure it preserves the
+request headers required by your client integration.
 
 Only **absolute** paths are accepted from the header (drive letter, UNC, or POSIX). A relative path is
 ignored rather than forwarded, because AgentDock would resolve it against `~/AgentDock` — the exact
