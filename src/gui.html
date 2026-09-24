@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Arena 模型提供商 · 本地桥接 GUI</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f3f8f4;
+    --bg-2: #eaf2ec;
+    --panel: #ffffff;
+    --panel-2: #f9fcfa;
+    --panel-3: #f1f7f3;
+    --line: #e2ebe4;
+    --line-2: #cfe0d5;
+    --line-3: #b9d3c3;
+    --txt: #1b2a22;
+    --dim: #5b6d63;
+    --faint: #8a9c91;
+    --accent: #3f9d6d;
+    --accent-2: #67c493;
+    --accent-deep: #2b7d54;
+    --accent-soft: #e8f5ed;
+    --accent-soft-2: #d6efe0;
+    --ok: #2f9e6e;
+    --ok-soft: #e6f5ec;
+    --ok-line: #bfe3cd;
+    --warn-soft: #fff8e9;
+    --warn-line: #f0dfae;
+    --danger: #b8473f;
+    --danger-soft: #fdeceb;
+    --danger-line: #f2c9c5;
+    --radius: 12px;
+    --radius-sm: 10px;
+    --shadow: 0 1px 3px rgba(31, 74, 52, .05), 0 6px 18px rgba(31, 74, 52, .06);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg);
+    color: var(--txt);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: "";
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(720px 360px at 10% -8%, rgba(103, 196, 147, .18), transparent 62%),
+      radial-gradient(680px 340px at 92% 2%, rgba(63, 157, 109, .12), transparent 60%),
+      radial-gradient(900px 520px at 50% 110%, rgba(180, 221, 197, .32), transparent 66%);
+  }
+
+  ::selection { background: rgba(63, 157, 109, .22); }
+
+  /* ── Top bar ─────────────────────────────────────────────────────────── */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 12px 22px;
+    background: rgba(255, 255, 255, .88);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .logo {
+    width: 34px; height: 34px; flex: none; border-radius: 10px;
+    display: grid; place-items: center;
+    background: linear-gradient(140deg, var(--accent), var(--accent-2));
+    box-shadow: 0 4px 12px rgba(63, 157, 109, .3);
+    color: #fff;
+  }
+  .logo svg { width: 18px; height: 18px; }
+  .brand h1 { margin: 0; font-size: 14.5px; font-weight: 650; color: #17251d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand p { margin: 1px 0 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
+
+  .live {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 4px 11px; border-radius: 999px; font-size: 11.5px;
+    color: var(--accent-deep); background: var(--accent-soft); border: 1px solid var(--ok-line);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 158, 110, .18); }
+  .dot.pulse { animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* ── Tabs ────────────────────────────────────────────────────────────── */
+  .tabs {
+    position: sticky; top: 59px; z-index: 15;
+    display: flex; gap: 6px; padding: 8px 22px;
+    background: rgba(255, 255, 255, .88);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .tab {
+    background: transparent; border: 1px solid transparent;
+    color: var(--dim); padding: 6px 14px; border-radius: 9px; font-size: 13px;
+  }
+  .tab:hover { background: var(--panel-3); color: var(--txt); }
+  .tab.active { background: var(--accent-soft); border-color: var(--ok-line); color: var(--accent-deep); font-weight: 620; }
+  .page.hidden { display: none; }
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  .wrap { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 14px 22px 44px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .side { display: grid; gap: 12px; }
+  .single { max-width: 760px; }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+  /* ── Panels ──────────────────────────────────────────────────────────── */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .panel-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+  .panel-title h2 { margin: 0; font-size: 13.5px; font-weight: 620; color: #22382c; }
+  .panel-title .ico {
+    width: 24px; height: 24px; flex: none; display: grid; place-items: center;
+    border-radius: 7px; background: var(--accent-soft); border: 1px solid var(--ok-line); color: var(--accent-deep);
+  }
+  .panel-title .ico svg { width: 13px; height: 13px; }
+
+  /* ── Notice ──────────────────────────────────────────────────────────── */
+  .banner {
+    display: flex; gap: 10px; align-items: flex-start;
+    margin: 0 0 12px; padding: 11px 14px; border-radius: var(--radius-sm);
+    background: var(--warn-soft); border: 1px solid var(--warn-line); color: #6f5717; font-size: 12.5px;
+  }
+  .banner .ico { flex: none; color: #c79a2c; margin-top: 1px; }
+  .banner .ico svg { width: 15px; height: 15px; display: block; }
+  .banner b { color: #6b5315; font-weight: 640; }
+
+  /* ── Stat chips ──────────────────────────────────────────────────────── */
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+  .stat { flex: 1 1 150px; min-width: 140px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 9px 12px; box-shadow: var(--shadow); }
+  .stat .k { font-size: 11.5px; color: var(--dim); }
+  .stat .v { font-size: 19px; font-weight: 650; color: #1b2a22; line-height: 1.25; }
+  .stat .sub { font-size: 11px; color: var(--faint); word-break: break-all; }
+
+  /* ── Session cards ───────────────────────────────────────────────────── */
+  .card {
+    position: relative; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 12px; margin-bottom: 8px; background: var(--panel);
+    transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+  .card:hover { border-color: var(--line-2); background: var(--panel-2); transform: translateY(-1px); box-shadow: var(--shadow); }
+  .card.active { border-color: var(--ok-line); background: linear-gradient(180deg, #f4fbf7, #ffffff); box-shadow: 0 0 0 1px var(--accent-soft-2) inset, var(--shadow); }
+  .card.active::before {
+    content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px;
+    border-radius: 0 3px 3px 0; background: linear-gradient(180deg, var(--accent-2), var(--accent-deep));
+  }
+  .sc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .name { font-weight: 620; font-size: 14px; color: #17251d; }
+  .meta { color: var(--dim); font-size: 12px; margin-top: 4px; word-break: break-all; }
+  .uuid { color: var(--faint); font-size: 11.5px; margin-top: 3px; word-break: break-all; font-family: var(--mono); }
+  .sc-url { margin-top: 7px; padding: 8px 10px; border-radius: 8px; background: var(--panel-3); border: 1px dashed var(--line-2); color: var(--faint); font-size: 11.5px; word-break: break-all; }
+  .sc-url b { color: #9a6d16; font-weight: 640; }
+  .sc-actions { margin-top: 9px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ── Pills ───────────────────────────────────────────────────────────── */
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11px; background: var(--ok-soft); color: var(--accent-deep); border: 1px solid var(--ok-line); line-height: 1.7; }
+  .pill.grey { background: var(--panel-3); color: var(--dim); border-color: var(--line-2); }
+  .pill.blue { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--ok-line); }
+  .pill.danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-line); }
+
+  /* ── Buttons ─────────────────────────────────────────────────────────── */
+  button {
+    cursor: pointer; font-family: inherit; font-size: 12.8px;
+    border-radius: 9px; padding: 7px 13px; border: 1px solid transparent;
+    transition: background .16s ease, border-color .16s ease, color .16s ease, transform .12s ease, opacity .16s ease, box-shadow .16s ease;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  button svg { width: 13px; height: 13px; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn-primary { background: linear-gradient(140deg, var(--accent), var(--accent-deep)); border-color: #2b7d54; color: #fff; box-shadow: 0 3px 10px rgba(43, 125, 84, .26); }
+  .btn-primary:hover { background: linear-gradient(140deg, #4aab79, #2f8a5d); }
+  .btn-ghost { background: #fff; border-color: var(--line-2); color: #3d5148; }
+  .btn-ghost:hover { background: var(--panel-3); border-color: var(--line-3); color: #1b2a22; }
+  .btn-danger { background: #fff; border-color: var(--danger-line); color: var(--danger); }
+  .btn-danger:hover { background: var(--danger-soft); }
+  .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+
+  /* ── Fields ──────────────────────────────────────────────────────────── */
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 11.8px; color: var(--dim); margin-bottom: 4px; }
+  .field .val { display: flex; gap: 8px; align-items: stretch; }
+  .field code {
+    flex: 1; min-width: 0; background: var(--panel-3); border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 12px; color: #14684a; word-break: break-all;
+    display: flex; align-items: center;
+  }
+  .copy-btn { flex: none; align-self: stretch; }
+  .copy-btn.done { background: var(--ok-soft) !important; border-color: var(--ok-line) !important; color: var(--accent-deep) !important; }
+  pre.sample { background: var(--panel-3); border: 1px solid var(--line); border-radius: 9px; padding: 11px 12px; font-size: 11.8px; color: #1c6b4c; font-family: var(--mono); overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }
+  .code-block { position: relative; margin-bottom: 10px; }
+  .code-block > label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.8px; color: var(--dim); margin-bottom: 4px; }
+  .muted { color: var(--faint); font-size: 12px; }
+  .hint { margin-top: 8px; padding: 9px 11px; border-radius: 9px; background: var(--panel-3); border: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+  .hint b { color: #2b4636; font-weight: 640; }
+  .hint code { font-family: var(--mono); font-size: 11.5px; color: #14684a; }
+  a { color: #2b7d54; }
+
+  /* ── Empty / loading ─────────────────────────────────────────────────── */
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 7px; text-align: center; padding: 22px 14px; border: 1px dashed var(--line-2); border-radius: var(--radius-sm); background: var(--panel-2); color: var(--faint); font-size: 12.5px; }
+  .empty .ico { color: var(--accent-2); }
+  .empty .ico svg { width: 22px; height: 22px; }
+  .empty code { font-family: var(--mono); font-size: 11.5px; color: #14684a; }
+  .skeleton { height: 88px; margin-bottom: 8px; border-radius: var(--radius-sm); background: linear-gradient(90deg, #f0f6f2 25%, #e4eee8 37%, #f0f6f2 63%); background-size: 400% 100%; animation: shimmer 1.3s ease-in-out infinite; }
+  @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+
+  /* ── Form controls ───────────────────────────────────────────────────── */
+  .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .form-row > label { flex: 1 1 120px; min-width: 110px; }
+  .form-row > label > span { display: block; font-size: 11.8px; color: var(--dim); margin-bottom: 4px; }
+  input[type="text"], input[type="number"], textarea, select {
+    width: 100%; font-family: inherit; font-size: 12.8px; color: var(--txt);
+    background: #fff; border: 1px solid var(--line-2); border-radius: 9px; padding: 7px 10px;
+    transition: border-color .16s ease, box-shadow .16s ease;
+  }
+  textarea { resize: vertical; min-height: 58px; line-height: 1.5; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(63, 157, 109, .16); }
+  input:disabled, textarea:disabled, select:disabled { background: var(--panel-3); color: var(--faint); }
+  .pick { width: 15px; height: 15px; accent-color: var(--accent); flex: none; cursor: pointer; }
+  .selbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .picklist { max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); }
+  .pickrow { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
+  .pickrow:last-child { border-bottom: 0; }
+  .pickrow:hover { background: var(--panel-3); }
+  .pickrow .nm { font-weight: 600; }
+  .pickrow .sub { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+
+  /* ── Progress + log ──────────────────────────────────────────────────── */
+  .progress { height: 7px; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--line); overflow: hidden; margin-bottom: 9px; }
+  .progress > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .35s ease; }
+  .log { max-height: 210px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); padding: 7px 10px; font-size: 11.8px; font-family: var(--mono); color: var(--dim); }
+  .log .line { padding: 2px 0; border-bottom: 1px solid rgba(226, 235, 228, .7); }
+  .log .line:last-child { border-bottom: 0; }
+  .log .ok { color: var(--accent-deep); }
+  .log .bad { color: var(--danger); }
+
+  /* ── Result table ────────────────────────────────────────────────────── */
+  table.res { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.res th, table.res td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.res th { color: var(--dim); font-weight: 600; font-size: 11.5px; }
+  table.res td.reply { color: var(--dim); max-width: 340px; word-break: break-word; }
+
+  /* ── Toast ───────────────────────────────────────────────────────────── */
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(6px);
+    display: flex; align-items: center; gap: 8px; background: #265743; border: 1px solid #1f4a38; color: #fff;
+    padding: 8px 15px; border-radius: 999px; font-size: 12.8px; box-shadow: 0 10px 30px rgba(31, 74, 52, .28);
+    opacity: 0; pointer-events: none; z-index: 99; transition: opacity .18s ease, transform .18s ease; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast .ico { color: #9fe6c1; display: flex; }
+  #toast .ico svg { width: 14px; height: 14px; }
+  #toast.err { background: #a13b33; border-color: #8a2f28; }
+  #toast.err .ico { color: #ffd2ce; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbdccf; border-radius: 8px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: #b3ccb9; }
+
+  @media (max-width: 560px) {
+    .topbar, .tabs { padding-left: 14px; padding-right: 14px; }
+    .wrap { padding: 12px 14px 40px; }
+    .brand p { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 17V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10" />
+        <path d="M12 13 8 8h8l-4 5Z" />
+        <path d="M2 21h20" />
+      </svg>
+    </div>
+    <div style="min-width:0">
+      <h1>Arena 模型提供商 · 本地桥接</h1>
+      <p>抽卡 → 归档 → 选用 → 测试 → 接入客户端，全流程一个界面</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="live"><span class="dot pulse"></span><span>本地服务 127.0.0.1</span></span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-page="archive">模型归档 / 连接</button>
+  <button class="tab" data-page="harvest">连抽采集</button>
+  <button class="tab" data-page="test">批量测试</button>
+</nav>
+
+<main class="wrap">
+  <div class="banner" id="banner">
+    <span class="ico" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+        <path d="M12 9v4" /><path d="M12 17h.01" />
+      </svg>
+    </span>
+    <div>提示：bridge 用<b>一次性临时账号</b>在自带的有头浏览器里驱动 session；你本机浏览器是<b>另一个账号</b>。所以<b>不要在自己浏览器里打开这些 session</b>。驱动对话请走下面的 API / Proxy。</div>
+  </div>
+
+  <!-- ══════════ PAGE: 归档 / 连接 ══════════ -->
+  <section class="page" id="page-archive">
+    <div class="stats" id="statsBar"></div>
+    <div class="layout">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <span class="ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 7h-9" /><path d="M14 17H5" />
+                <circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" />
+              </svg>
+            </span>
+            <h2>模型归档 / 可选 session</h2>
+          </div>
+          <button class="btn-ghost btn-sm" id="refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-3.2-6.9" /><path d="M21 3v6h-6" />
+            </svg>
+            刷新
+          </button>
+        </div>
+        <div class="selbar">
+          <button class="btn-ghost btn-sm" id="selAll">全选</button>
+          <button class="btn-ghost btn-sm" id="selNone">清空</button>
+          <span class="muted" id="selCount">已选 0 个</span>
+        </div>
+        <div id="sessions">
+          <div class="skeleton"></div>
+          <div class="skeleton"></div>
+        </div>
+      </section>
+
+      <div class="side">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+                  <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
+                </svg>
+              </span>
+              <h2>连接信息</h2>
+              <span id="activePill"></span>
+            </div>
+          </div>
+          <div id="conn"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="4" width="20" height="12" rx="2" /><path d="M8 20h8" /><path d="M12 16v4" />
+                </svg>
+              </span>
+              <h2>本机 MCP（让 Arena 操作这台电脑）</h2>
+            </div>
+            <button class="btn-ghost btn-sm" id="mcpRefresh">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-3.2-6.9" /><path d="M21 3v6h-6" />
+              </svg>
+              刷新
+            </button>
+          </div>
+          <div id="mcpBox"></div>
+          <div class="row" style="margin-top:10px;margin-bottom:0">
+            <button class="btn-primary" id="mcpStart">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
+              一键启动
+            </button>
+            <button class="btn-danger" id="mcpStop">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+              停止并收回
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ PAGE: 连抽采集 ══════════ -->
+  <section class="page hidden single" id="page-harvest">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <span class="ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+            </svg>
+          </span>
+          <h2>连抽采集</h2>
+          <span id="harvestPill"></span>
+        </div>
+      </div>
+      <div class="hint" style="margin:0 0 10px">每一轮：新建 Arena 会话 → 用助手自带探针识别真实模型 → 写入归档目录。识别不到模型名也会入库（标记「未识别」），不算失败。</div>
+      <div class="form-row">
+        <label><span>连抽次数</span><input type="number" id="hvCount" value="5" min="1" max="500" /></label>
+        <label><span>每轮间隔（毫秒）</span><input type="number" id="hvInterval" value="3000" min="0" max="60000" step="500" /></label>
+      </div>
+      <div class="form-row">
+        <label><span>首轮 prompt</span><textarea id="hvPrompt">1+1=</textarea></label>
+      </div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn-primary" id="hvStart">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
+          开始连抽
+        </button>
+        <button class="btn-danger" id="hvStop">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+          停止
+        </button>
+        <span class="muted" id="hvSummary">未开始</span>
+      </div>
+      <div class="progress"><i id="hvBar"></i></div>
+      <div class="log" id="hvLog"><span class="muted">未开始。</span></div>
+    </section>
+  </section>
+
+  <!-- ══════════ PAGE: 批量测试 ══════════ -->
+  <section class="page hidden single" id="page-test">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <span class="ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+          </span>
+          <h2>批量测试模型</h2>
+          <span id="testPill"></span>
+        </div>
+      </div>
+      <div class="form-row">
+        <label><span>测试 prompt</span><textarea id="tsPrompt">请用一句话自我介绍，并说明你是哪个模型。</textarea></label>
+      </div>
+      <div class="form-row">
+        <label><span>并发数</span><input type="number" id="tsConc" value="1" min="1" max="8" /></label>
+        <label><span>&nbsp;</span>
+          <button class="btn-primary" id="tsStart" style="width:100%;justify-content:center">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
+            开始测试
+          </button>
+        </label>
+      </div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn-danger btn-sm" id="tsStop">停止</button>
+        <span class="muted" id="tsSummary">未开始</span>
+      </div>
+      <div class="progress"><i id="tsBar"></i></div>
+      <div id="tsResult"><span class="muted">还没有结果。</span></div>
+    </section>
+
+    <section class="panel" style="margin-top:12px">
+      <div class="panel-head">
+        <div class="panel-title">
+          <span class="ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 7h-9" /><path d="M14 17H5" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" />
+            </svg>
+          </span>
+          <h2>选择要测试的 session</h2>
+        </div>
+        <div class="selbar" style="margin:0">
+          <button class="btn-ghost btn-sm" id="selAll2">全选</button>
+          <button class="btn-ghost btn-sm" id="selNone2">清空</button>
+          <span class="muted" id="selCount2">已选 0 个</span>
+        </div>
+      </div>
+      <div class="picklist" id="pickList"><span style="padding:10px;display:block" class="muted">加载中…</span></div>
+    </section>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const SELECTED = new Set();
+const SESSIONS = [];
+const ICON = {
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  plug: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6Z"/><path d="M12 17v5"/></svg>',
+};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+function copy(text) {
+  navigator.clipboard?.writeText(text).catch(() => {});
+}
+
+function toast(msg, isErr) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.innerHTML = '<span class="ico"></span><span class="msg"></span>';
+    document.body.appendChild(el);
+  }
+  el.classList.toggle("err", !!isErr);
+  el.querySelector(".ico").innerHTML = isErr ? ICON.bolt : ICON.check;
+  el.querySelector(".msg").textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("show"), 1800);
+}
+
+// Buttons are wired with addEventListener + data-* instead of inline onclick:
+// the built-in preview panel runs the page under a CSP that blocks inline event
+// handlers, which made 「选用此模型」 look dead. See §4.27.
+function wire(root) {
+  root.querySelectorAll(".copy-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      copy(b.dataset.copy || "");
+      const html = b.innerHTML;
+      b.classList.add("done");
+      b.innerHTML = ICON.check + "<span>已复制</span>";
+      setTimeout(() => { b.classList.remove("done"); b.innerHTML = html; }, 1100);
+      toast("已复制");
+    });
+  });
+  root.querySelectorAll(".choose-btn").forEach((b) => {
+    b.addEventListener("click", () => choose(b.dataset.sid));
+  });
+  root.querySelectorAll(".pick").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) SELECTED.add(cb.dataset.sid);
+      else SELECTED.delete(cb.dataset.sid);
+      updateSelCount();
+      syncPickRows();
+    });
+  });
+}
+
+function updateSelCount() {
+  const n = SELECTED.size;
+  const a = $("#selCount"), b = $("#selCount2");
+  if (a) a.textContent = "已选 " + n + " 个";
+  if (b) b.textContent = "已选 " + n + " 个";
+}
+
+function syncPickRows() {
+  document.querySelectorAll(".pick").forEach((cb) => {
+    cb.checked = SELECTED.has(cb.dataset.sid);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function field(label, value, key) {
+  return `<div class="field"><label>${label}</label><div class="val">` +
+    `<code id="${key}">${escapeHtml(value)}</code>` +
+    `<button class="btn-ghost btn-sm copy-btn" data-copy="${escapeHtml(value)}" title="复制">${ICON.copy}<span>复制</span></button>` +
+    `</div></div>`;
+}
+
+function codeBlock(label, value) {
+  return `<div class="field code-block"><label><span>${label}</span>` +
+    `<button class="btn-ghost btn-sm copy-btn" data-copy="${escapeHtml(value)}" title="复制">${ICON.copy}<span>复制</span></button>` +
+    `</label><pre class="sample">${escapeHtml(value)}</pre></div>`;
+}
+
+function sampleCurl(origin, key, model) {
+  return `curl ${origin}/v1/chat/completions \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${model}","messages":[{"role":"user","content":"你好"}]}'`;
+}
+
+function emptyState(icon, title, detailHtml) {
+  return `<div class="empty"><span class="ico">${icon}</span>` +
+    `<div style="color:#2b4636;font-size:13px;font-weight:600">${title}</div>` +
+    `<div>${detailHtml || ""}</div></div>`;
+}
+
+async function render() {
+  const btn = $("#refresh");
+  btn.disabled = true;
+  try {
+    const [sessions, status] = await Promise.all([api("/api/sessions"), api("/api/status")]);
+    renderSessions(sessions, status);
+    renderConn(status);
+    BRIDGE_KEY = status.apiKey || BRIDGE_KEY;
+  } catch (e) {
+    $("#sessions").innerHTML = emptyState(ICON.bolt, "读取失败", "无法连接本地 bridge：" + escapeHtml(e.message));
+    $("#conn").innerHTML = "";
+  } finally {
+    btn.disabled = false;
+  }
+  await mcpRender();
+}
+
+function renderSessions(sessions, status) {
+  const list = sessions.sessions || [];
+  SESSIONS.length = 0;
+  list.forEach((s) => SESSIONS.push(s));
+  const box = $("#sessions");
+  if (!list.length) {
+    box.innerHTML = emptyState(ICON.inbox, "未读到 session",
+      `请确认 <code>ARENA_ARCHIVE_DIR</code> 指向「模型归档」目录（含 记录.json）。<br>当前：${escapeHtml(sessions.archiveDir || "(未设置)")}`);
+  } else {
+    const active = status.activeSession;
+    box.innerHTML = list.map((s) => {
+      const isActive = s.sessionId === active;
+      return `
+        <article class="card ${isActive ? "active" : ""}" id="card-${s.sessionId}">
+          <div class="sc-head">
+            <input type="checkbox" class="pick" data-sid="${escapeHtml(s.sessionId)}" ${SELECTED.has(s.sessionId) ? "checked" : ""} aria-label="选择" />
+            <span class="name">${escapeHtml(s.model || s.title)}</span>
+            ${isActive ? '<span class="pill">当前选用</span>' : ""}
+          </div>
+          <div class="meta">${escapeHtml(s.title || "")}${s.email ? " · " + escapeHtml(s.email) : ""}${s.collectedAt ? " · " + escapeHtml(s.collectedAt) : ""}</div>
+          <div class="uuid">${escapeHtml(s.sessionId)}</div>
+          <div class="sc-actions">
+            <button class="${isActive ? "btn-ghost" : "btn-primary"} btn-sm choose-btn" data-sid="${escapeHtml(s.sessionId)}" ${isActive ? "disabled" : ""}>
+              ${isActive ? ICON.check + "<span>正在使用</span>" : ICON.plug + "<span>选用此模型</span>"}
+            </button>
+          </div>
+          <div class="sc-url">Arena URL（仅供参考，<b>勿在你自己浏览器打开</b>）：<br>${escapeHtml(s.url)}</div>
+        </article>`;
+    }).join("");
+  }
+  wire(box);
+  renderPickList();
+  updateSelCount();
+}
+
+function renderPickList() {
+  const box = $("#pickList");
+  if (!box) return;
+  if (!SESSIONS.length) {
+    box.innerHTML = '<div style="padding:10px"><span class="muted">归档里还没有 session。</span></div>';
+    return;
+  }
+  box.innerHTML = SESSIONS.map((s) => `
+    <label class="pickrow">
+      <input type="checkbox" class="pick" data-sid="${escapeHtml(s.sessionId)}" ${SELECTED.has(s.sessionId) ? "checked" : ""} />
+      <span class="nm">${escapeHtml(s.model || s.title)}</span>
+      <span class="sub">${escapeHtml(s.sessionId.slice(0, 13))}…</span>
+    </label>`).join("");
+  wire(box);
+}
+
+async function choose(sessionId) {
+  try {
+    const r = await api("/api/active-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId }) });
+    toast(r && r.ok ? "已选用该模型" : "选用失败：" + (r?.error?.message || "未知错误"), !(r && r.ok));
+  } catch (e) {
+    toast("选用失败：" + e.message, true);
+  }
+  await render();
+}
+
+function renderConn(status) {
+  const pill = $("#activePill");
+  const box = $("#conn");
+  if (!status.activeSession) {
+    pill.innerHTML = "";
+    box.innerHTML = emptyState(ICON.plug, "尚未选用 session", "在左侧点「选用此模型」后，这里会给出 API / Proxy 地址。");
+    return;
+  }
+  pill.innerHTML = '<span class="pill blue">已选用</span>';
+  const o = status.origin;
+  box.innerHTML =
+    field("API Base URL（粘到客户端的 API Base / Proxy）", `${o}/v1`, "apiBase") +
+    field("Proxy URL（本机代理地址，同上）", `${o}/v1`, "proxy") +
+    field("API Key", status.apiKey || "", "key") +
+    field("model · 推荐填 active（自动指向当前选中模型）", "active", "modelActive") +
+    field("model · 或填此 UUID（客户端不认 active 别名时用）", status.model, "model") +
+    field("Chat 端点", `${o}/v1/chat/completions`, "chat") +
+    codeBlock("示例 curl（用 active）", sampleCurl(o, status.apiKey, "active")) +
+    `<div class="hint">客户端把 base_url 设为 <code>${o}/v1</code>，model 填 <b>active</b> 或上面 UUID；流式加 <code>"stream":true</code>。</div>`;
+  wire(box);
+}
+
+let BRIDGE_KEY = "";
+async function mcpApi(p, opts) {
+  const r = await fetch(p, { ...opts, headers: { ...(opts?.headers || {}), Authorization: "Bearer " + BRIDGE_KEY } });
+  return r.json();
+}
+async function keyPost(p, body) {
+  return mcpApi(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+}
+
+async function mcpRender() {
+  const box = $("#mcpBox");
+  let s;
+  try { s = await mcpApi("/api/mcp/status"); }
+  catch (e) { box.innerHTML = emptyState(ICON.bolt, "MCP 状态读取失败", escapeHtml(e.message)); return; }
+  if (!s.installed) {
+    box.innerHTML = emptyState(ICON.inbox, "未找到 AgentDock 目录",
+      `${s.dir ? "目录：" + escapeHtml(s.dir) + "<br>" : ""}设置 <code>ARENA_AGENTDOCK_DIR</code> 指向含 agentdock.exe / cloudflared.exe 的文件夹。`);
+    wire(box); return;
+  }
+  if (!s.running) {
+    box.innerHTML = '<span class="pill grey">已停止</span>' +
+      `<div class="hint" style="margin-top:8px">点「一键启动」会：开公网临时隧道 → 起本机 MCP 服务 → bridge 自动把端点告诉 Arena。<b>用完务必点「停止并收回」。</b></div>`;
+    wire(box); return;
+  }
+  const line = `MCP: ${s.url} | header: Authorization: Bearer ${s.token}`;
+  box.innerHTML = '<div style="margin-bottom:10px"><span class="pill">运行中 · 公网可访问</span></div>' +
+    field("MCP 端点（公网）", s.url, "mcpUrl") +
+    field("Bearer token", s.token, "mcpToken") +
+    field("注入给 Arena 的那句话（仅供查看/手工粘贴）", line, "mcpLine") +
+    `<div class="hint"><b style="color:#b8473f">注意：</b>隧道开着期间，任何拿到上面 URL + token 的人都能操作这台电脑。</div>`;
+  wire(box);
+}
+async function mcpStart() {
+  const btn = $("#mcpStart");
+  btn.disabled = true; btn.textContent = "启动中…（约 30 秒）";
+  try {
+    const r = await keyPost("/api/mcp/start");
+    if (r && r.error) toast("启动失败：" + (r.error.message || ""), true);
+  } catch (e) { toast("启动失败：" + e.message, true); }
+  finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>一键启动';
+    await mcpRender();
+  }
+}
+async function mcpStop() {
+  try { await keyPost("/api/mcp/stop"); toast("已停止并收回"); }
+  catch (e) { toast("停止失败：" + e.message, true); }
+  await mcpRender();
+}
+
+/* ── 归档概览 ─────────────────────────────────────────────────────────── */
+function chip(k, v, sub) {
+  return `<div class="stat"><div class="k">${k}</div>` +
+    (sub ? `<div class="sub">${escapeHtml(sub)}</div>` : `<div class="v">${escapeHtml(String(v))}</div>`) + `</div>`;
+}
+async function loadStats() {
+  try {
+    const s = await api("/api/archive/stats");
+    $("#statsBar").innerHTML = chip("归档 session", s.total) + chip("模型数", s.models) + chip("归档目录", "", s.archiveDir || "(未设置)");
+  } catch { $("#statsBar").innerHTML = chip("归档 session", "—"); }
+}
+
+/* ── 连抽采集 ─────────────────────────────────────────────────────────── */
+let hvTimer = null;
+async function hvStatus() {
+  const s = await mcpApi("/api/harvest/status");
+  $("#harvestPill").innerHTML = s.running
+    ? `<span class="pill">连抽中 ${s.done}/${s.total}</span>`
+    : s.done ? `<span class="pill grey">成功 ${s.ok} / 共 ${s.done}</span>` : "";
+  $("#hvBar").style.width = (s.total ? Math.round((s.done / s.total) * 100) : 0) + "%";
+  $("#hvSummary").textContent = s.running
+    ? `进行中 ${s.done}/${s.total} · 成功 ${s.ok} · 失败 ${s.failed}`
+    : s.done ? `已结束 · 成功 ${s.ok} · 失败 ${s.failed} · 共 ${s.done}` : "未开始";
+  const lines = (s.rounds || []).slice().reverse().map((r) => {
+    const tail = r.ms ? ` · ${Math.round(r.ms / 100) / 10}s` : "";
+    const via = r.via ? ` · ${escapeHtml(r.via)}` : "";
+    return `<div class="line ${r.ok ? "ok" : "bad"}">#${r.index} ` +
+      (r.ok
+        ? (r.model ? `✓ ${escapeHtml(r.model)}` : `✓ 已入库（未识别模型${r.probeError ? "：" + escapeHtml(r.probeError) : ""}）`) + via + tail
+        : `✗ ${escapeHtml(r.error || "失败")}${tail}`) + `</div>`;
+  }).join("");
+  const err = s.lastError && !s.running ? `<div class="line bad">中止原因：${escapeHtml(s.lastError)}</div>` : "";
+  $("#hvLog").innerHTML = (err + lines) || '<span class="muted">未开始。</span>';
+  $("#hvStart").disabled = s.running;
+  $("#hvStop").disabled = !s.running;
+  if (s.running && !hvTimer) hvTimer = setInterval(hvPoll, 1500);
+  if (!s.running && hvTimer) { clearInterval(hvTimer); hvTimer = null; loadStats(); render(); }
+  return s;
+}
+async function hvPoll() { try { await hvStatus(); } catch { /* keep polling */ } }
+async function hvStart() {
+  const payload = {
+    count: Number($("#hvCount").value || 0),
+    prompt: $("#hvPrompt").value,
+    intervalMs: Number($("#hvInterval").value || 0),
+  };
+  $("#hvStart").disabled = true;
+  try {
+    const r = await keyPost("/api/harvest/start", payload);
+    if (r && r.error) { toast("启动失败：" + r.error.message, true); $("#hvStart").disabled = false; return; }
+    toast("已开始连抽 " + payload.count + " 次");
+    await hvStatus();
+  } catch (e) { toast("启动失败：" + e.message, true); $("#hvStart").disabled = false; }
+}
+async function hvStop() {
+  $("#hvStop").disabled = true;
+  try {
+    await keyPost("/api/harvest/stop");
+    toast("已请求停止，当前一轮结束后停止");
+  } catch (e) { toast("停止失败：" + e.message, true); }
+  await hvStatus();
+}
+
+/* ── 批量测试 ─────────────────────────────────────────────────────────── */
+let tsTimer = null;
+async function tsStatus() {
+  const s = await mcpApi("/api/test/status");
+  $("#testPill").innerHTML = s.running ? `<span class="pill">测试中 ${s.done}/${s.total}</span>` : "";
+  $("#tsBar").style.width = (s.total ? Math.round((s.done / s.total) * 100) : 0) + "%";
+  $("#tsSummary").textContent = s.done ? `成功 ${s.ok} · 失败 ${s.failed} · 共 ${s.total}` : "未开始";
+  $("#tsStart").disabled = s.running;
+  $("#tsStop").disabled = !s.running;
+  const rows = (s.results || []).map((r) => `
+    <tr>
+      <td>${escapeHtml(r.model || r.sessionId)}</td>
+      <td>${r.ok ? '<span class="pill">通过</span>' : '<span class="pill danger">失败</span>'}</td>
+      <td>${Math.round(r.ms / 100) / 10}s</td>
+      <td class="reply">${escapeHtml(r.ok ? (r.text || "(空回复)").slice(0, 300) : r.error || "")}</td>
+    </tr>`).join("");
+  $("#tsResult").innerHTML = rows
+    ? `<div style="max-height:280px;overflow-y:auto"><table class="res"><thead><tr><th>模型</th><th>结果</th><th>耗时</th><th>回复 / 错误</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : '<span class="muted">还没有结果。</span>';
+  if (s.running && !tsTimer) tsTimer = setInterval(tsPoll, 1500);
+  if (!s.running && tsTimer) { clearInterval(tsTimer); tsTimer = null; }
+  return s;
+}
+async function tsPoll() { try { await tsStatus(); } catch { /* keep polling */ } }
+async function tsStart() {
+  const ids = [...SELECTED];
+  if (!ids.length) { toast("先在下方勾选要测试的 session", true); return; }
+  const payload = { sessionIds: ids, prompt: $("#tsPrompt").value, concurrency: Number($("#tsConc").value || 1) };
+  $("#tsStart").disabled = true;
+  try {
+    const r = await keyPost("/api/test/start", payload);
+    if (r && r.error) { toast("启动失败：" + r.error.message, true); $("#tsStart").disabled = false; return; }
+    toast("已开始测试 " + ids.length + " 个 session");
+    await tsStatus();
+  } catch (e) { toast("启动失败：" + e.message, true); $("#tsStart").disabled = false; }
+}
+async function tsStop() {
+  try { await keyPost("/api/test/stop"); toast("已请求停止"); }
+  catch (e) { toast("停止失败：" + e.message, true); }
+  await tsStatus();
+}
+
+/* ── 页面切换 ─────────────────────────────────────────────────────────── */
+function switchPage(name) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.page === name));
+  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("hidden", p.id !== "page-" + name));
+  if (name === "test") renderPickList();
+}
+document.querySelectorAll(".tab").forEach((t) => {
+  t.addEventListener("click", () => switchPage(t.dataset.page));
+});
+
+function selectAll(on) {
+  document.querySelectorAll(".pick").forEach((cb) => {
+    cb.checked = on;
+    if (on) SELECTED.add(cb.dataset.sid); else SELECTED.delete(cb.dataset.sid);
+  });
+  updateSelCount();
+}
+
+$("#mcpRefresh").addEventListener("click", mcpRender);
+$("#mcpStart").addEventListener("click", mcpStart);
+$("#mcpStop").addEventListener("click", mcpStop);
+$("#refresh").addEventListener("click", render);
+$("#hvStart").addEventListener("click", hvStart);
+$("#hvStop").addEventListener("click", hvStop);
+$("#tsStart").addEventListener("click", tsStart);
+$("#tsStop").addEventListener("click", tsStop);
+$("#selAll").addEventListener("click", () => selectAll(true));
+$("#selNone").addEventListener("click", () => selectAll(false));
+$("#selAll2").addEventListener("click", () => selectAll(true));
+$("#selNone2").addEventListener("click", () => selectAll(false));
+render();
+loadStats();
+hvStatus().catch(() => undefined);
+tsStatus().catch(() => undefined);
+</script>
+</body>
+</html>

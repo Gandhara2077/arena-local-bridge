@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+// arena-bridge — standalone entry point:
+//  1) provisions DATA_DIR + .env (auto-generates an encryption key),
+//  2) loads/creates credentials (login with email/password via bin/login.mjs),
+//  3) boots the OpenAI-compatible HTTP bridge,
+//  4) auto-refreshes the arena.ai session before the cookie expires,
+//  5) graceful shutdown.
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { loadDotEnv, loadConfig } from "./config.mjs";
+import { CredentialStore } from "./credentials.mjs";
+import { Bridge } from "./bridge.mjs";
+import { RecaptchaBroker } from "./recaptcha.mjs";
+import { createServer } from "./server.mjs";
+import { log } from "./util.mjs";
+import { requireSecret } from "./secret.mjs";
+
+const STARTED_AT = Date.now();
+
+async function main() {
+  // 1. Environment (DATA_DIR/.env overrides process env only when unset)
+  const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "/root", ".arena-bridge");
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const dotEnv = loadDotEnv(path.join(dataDir, ".env"));
+  const mergedEnv = { ...dotEnv, ...process.env };
+  const config = loadConfig(mergedEnv);
+  log.info("boot", "arena-bridge starting", {
+    version: "5.0.0",
+    host: config.host,
+    port: config.port,
+    dataDir: config.dataDir,
+  });
+
+  // 2. Provision a local encryption key (so credentials are encrypted at rest)
+  if (!dotEnv.STORAGE_ENCRYPTION_KEY) {
+    const key = crypto.randomBytes(32).toString("hex");
+    fs.appendFileSync(config.envPath, `\nSTORAGE_ENCRYPTION_KEY=${key}\n`, { mode: 0o600 });
+    dotEnv.STORAGE_ENCRYPTION_KEY = key;
+    log.info("boot", "generated STORAGE_ENCRYPTION_KEY and wrote to " + config.envPath);
+  }
+
+  // 3. Self-checks (fail fast with precise messages)
+  const checks = [];
+  if (config.chromePath && !fs.existsSync(config.chromePath)) {
+    checks.push(`chromium binary not found at ${config.chromePath} (set ARENA_AGENT_CHROME)`);
+  }
+  if (!fs.existsSync(config.dataDir)) {
+    checks.push(`DATA_DIR does not exist: ${config.dataDir}`);
+  }
+  if (checks.length) {
+    for (const c of checks) log.error("boot", c);
+    process.exit(1);
+  }
+
+  // 4. Credentials
+  const secret = requireSecret(dotEnv);
+  const credentials = new CredentialStore({
+    filePath: config.credentialsFile,
+    secret,
+    omniDbPath: config.omniDbPath,
+  }).load();
+  let credential;
+  try {
+    credential = credentials.ensure({ migrateFromOmni: config.migrateFromOmni });
+  } catch (error) {
+    log.error(
+      "boot",
+      error.message +
+        " Run: node bin/login.mjs --email <your-arena-email> --password <your-password> (password is stored encrypted)."
+    );
+    process.exit(1);
+  }
+  log.info("boot", "credential ready", {
+    account: credential.email,
+    cookieExpiry: credentials.expirySummary(credential),
+    autoRefresh: Boolean(credentials.loginSecretFor(credential)),
+  });
+
+  // 5. Browser + bridge + recaptcha
+  const bridge = new Bridge({ config, credentials, recaptcha: null, startedAt: STARTED_AT });
+  const recaptcha = new RecaptchaBroker({
+    browser: bridge.browser,
+    siteKey: config.recaptchaSiteKey,
+    ttlMs: config.recaptchaTtlMs,
+  });
+  bridge.recaptcha = recaptcha;
+
+  await bridge.start();
+
+  // 6. HTTP server
+  const server = createServer({ bridge, config });
+  server.listen(config.port, config.host, () => {
+    log.info("boot", `listening on http://${config.host}:${config.port}`, { mode: "stateless-claude-tools" });
+  });
+
+  // 7. Auto-refresh loop: re-login when the auth cookie approaches expiry
+  const refreshInterval = Math.max(60_000, config.refreshMarginSec * 1000);
+  const refreshTimer = setInterval(async () => {
+    const account = credentials.primary();
+    if (!account) return;
+    if (credentials.needsRefresh(account, config.refreshMarginSec)) {
+      log.info("refresh", "cookie near expiry; re-logging in", {
+        account: account.email,
+        expiry: credentials.expirySummary(account),
+      });
+      const loginSecret = credentials.loginSecretFor(account);
+      if (!loginSecret?.password) {
+        log.warn("refresh", "no stored password for auto-refresh; manual login required", { account: account.email });
+        credentials.lastLoginError = "cookie expired and no stored password for auto-refresh";
+        return;
+      }
+      try {
+        const result = await bridge.browser.login(loginSecret.email, loginSecret.password);
+        credentials.replaceCookie(result.email, result.cookieHeader);
+        await bridge.browser.close(); // force fresh context with the new cookie
+        log.info("refresh", "arena session refreshed", { account: result.email });
+      } catch (error) {
+        credentials.lastLoginError = error.message;
+        log.error("refresh", "auto-refresh failed", { error: error.message });
+      }
+    }
+  }, refreshInterval);
+  refreshTimer.unref?.();
+
+  // 8. Graceful shutdown
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info("boot", "shutting down");
+    clearInterval(refreshTimer);
+    server.close();
+    await bridge.browser.close().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+  process.on("unhandledRejection", (reason) => {
+    log.error("boot", "unhandledRejection", { error: String(reason) });
+  });
+}
+
+main().catch((error) => {
+  log.error("boot", "fatal", { message: error.message, stack: error.stack });
+  process.exit(1);
+});
