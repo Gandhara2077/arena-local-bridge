@@ -1,5 +1,7 @@
 # Arena Local Bridge
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Run your own [Arena.ai](https://arena.ai) Agent Mode sessions through a local **OpenAI-compatible API**.
 
 The project combines the browser/session bridge from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge) with additional local tooling for:
@@ -308,7 +310,3 @@ No code from the separately referenced Arena Model Assistant probe is distribute
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
----
-
-**English / 简体中文:** [README.zh-CN.md](README.zh-CN.md)
