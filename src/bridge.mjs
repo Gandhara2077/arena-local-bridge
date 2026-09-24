@@ -15,6 +15,8 @@ import {
   repeatedToolGuard,
 } from "./parser.mjs";
 import { log, retry } from "./util.mjs";
+import { mcpPreamble, workspaceFromHeaders } from "./mcp-preamble.mjs";
+import { resolveCodexWorkspace, resolveRecentCodexWorkspace } from "./codex-workspace.mjs";
 
 const encoder = new TextEncoder();
 
@@ -97,7 +99,7 @@ export class Bridge {
    * The endpoint file is written by start-arena-mcp.ps1 and deleted by
    * stop-arena-mcp.ps1, so injection only happens while the tunnel is up.
    */
-  #mcpEndpointLine(sessionId) {
+  #mcpEndpointLine(sessionId, headers = null) {
     if (!this.config.mcpEndpointFile) return "";
     let endpoint;
     try {
@@ -112,8 +114,42 @@ export class Bridge {
     if (this.mcpInjected.get(sessionId) === fingerprint) return ""; // already told
     this.mcpInjected.set(sessionId, fingerprint);
     this.#saveMcpInjected();
-    log.info("bridge", "converse: injecting local MCP endpoint into session", { sessionId, url });
-    return `MCP: ${url} | header: Authorization: Bearer ${token}`;
+    // Which local project this conversation is about. One bridge serves several
+    // conversations, so an explicit header wins; otherwise a Codex session id is
+    // traced back to the working directory Codex recorded; otherwise the
+    // configured default; otherwise say nothing at all.
+    const fromCaller = workspaceFromHeaders(headers);
+    const codexSessionId = String(headers?.["x-codex-session-id"] || "").trim();
+    const fromCodex =
+      fromCaller || !codexSessionId
+        ? ""
+        : resolveCodexWorkspace({ sessionsRoot: this.config.codexSessionsDir, sessionId: codexSessionId });
+    // Last resort when the session id never reaches us (a local proxy sits
+    // between the client and this bridge): the one transcript Codex is writing
+    // right now. Refuses to answer if more than one is active.
+    const fromRecent =
+      fromCaller || fromCodex
+        ? ""
+        : resolveRecentCodexWorkspace({
+            sessionsRoot: this.config.codexSessionsDir,
+            windowMs: this.config.codexRecentWindowMs,
+          });
+    const workspace = fromCaller || fromCodex || fromRecent || this.config.mcpWorkspace;
+    log.info("bridge", "converse: injecting local MCP endpoint into session", {
+      sessionId,
+      url,
+      workspace: workspace || null,
+      workspaceFrom: fromCaller
+        ? "request-header"
+        : fromCodex
+          ? "codex-session"
+          : fromRecent
+            ? "codex-recent"
+            : workspace
+              ? "config"
+              : "none",
+    });
+    return mcpPreamble({ url, token, workspace });
   }
 
   async start() {
@@ -1065,7 +1101,10 @@ export class Bridge {
     }
     // §4.25 — if the local AgentDock MCP endpoint is up, tell the session about
     // it once (kept deliberately short: long messages trip Arena's reCAPTCHA).
-    const mcpLine = this.#mcpEndpointLine(sessionId);
+    // Internal probes (体检) must not consume the once-per-session MCP preamble:
+    // injection is one-shot, so a health check would spend it and the real
+    // conversation would never be told about the workspace.
+    const mcpLine = options.injectMcp === false ? "" : this.#mcpEndpointLine(sessionId, options.headers || null);
     if (mcpLine) prompt = `${mcpLine}\n${prompt}`;
 
     // §4.36 — explicit end-of-turn marker (random per request). When the agent
@@ -1393,6 +1432,10 @@ export class Bridge {
       sessions: this.sessions.size,
       activeArenaAccounts: this.credentials.accounts.length,
       account: credential ? { email: credential.email, cookieExpiry: this.credentials.expirySummary(credential) } : null,
+      // Per-account health. An account that Arena refuses to serve is disabled
+      // here rather than silently driving a dead session — this is what makes a
+      // restricted account visible instead of showing ok forever.
+      accounts: this.credentials.list(),
       refresh: { lastLoginError: this.credentials.lastLoginError },
       recaptcha: this.recaptcha.status(),
       queue: { active: this.runtime.activeRequests, depth: this.runtime.queueDepth, maxDepth: this.config.maxQueue },

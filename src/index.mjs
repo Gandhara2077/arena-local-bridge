@@ -94,32 +94,63 @@ async function main() {
     log.info("boot", `listening on http://${config.host}:${config.port}`, { mode: "stateless-claude-tools" });
   });
 
-  // 7. Auto-refresh loop: re-login when the auth cookie approaches expiry
-  const refreshInterval = Math.max(60_000, config.refreshMarginSec * 1000);
-  const refreshTimer = setInterval(async () => {
-    const account = credentials.primary();
-    if (!account) return;
-    if (credentials.needsRefresh(account, config.refreshMarginSec)) {
-      log.info("refresh", "cookie near expiry; re-logging in", {
-        account: account.email,
-        expiry: credentials.expirySummary(account),
-      });
+  /**
+   * Walk the accounts in priority order until one both signs in AND is actually
+   * usable. Arena signs in and hands out a valid-looking cookie for a restricted
+   * account, then serves every session as a visitor — so "login returned 200" is
+   * not enough. An account that fails here is disabled and the next one is tried,
+   * instead of the bridge reporting healthy while every session fails.
+   */
+  async function ensureUsableAccount() {
+    const tried = [];
+    for (;;) {
+      const account = credentials.selectNext(tried);
+      if (!account) return null;
       const loginSecret = credentials.loginSecretFor(account);
       if (!loginSecret?.password) {
-        log.warn("refresh", "no stored password for auto-refresh; manual login required", { account: account.email });
-        credentials.lastLoginError = "cookie expired and no stored password for auto-refresh";
-        return;
+        log.warn("refresh", "no stored password; cannot verify account", { account: account.email });
+        credentials.disable(account.email, "no stored password for verification");
+        tried.push(account.email);
+        continue;
       }
       try {
         const result = await bridge.browser.login(loginSecret.email, loginSecret.password);
         credentials.replaceCookie(result.email, result.cookieHeader);
-        await bridge.browser.close(); // force fresh context with the new cookie
-        log.info("refresh", "arena session refreshed", { account: result.email });
+        await bridge.browser.close(); // force a fresh context with the new cookie
+        log.info("refresh", "account verified and refreshed", { account: result.email });
+        return result.email;
       } catch (error) {
-        credentials.lastLoginError = error.message;
-        log.error("refresh", "auto-refresh failed", { error: error.message });
+        credentials.disable(account.email, error.message);
+        tried.push(account.email);
+        log.error("refresh", "account unusable; trying next", { account: account.email, error: error.message });
       }
     }
+  }
+
+  // 7. Verify the account now that the port is up (a slow login must not make
+  // start-gui.bat's 6-second port probe report a failed start).
+  ensureUsableAccount()
+    .then((email) => {
+      if (email) log.info("boot", "usable account confirmed", { account: email });
+      else log.error("boot", "no usable Arena account", { error: credentials.lastLoginError });
+    })
+    .catch((error) => log.error("boot", "account verification crashed", { error: error.message }));
+
+  // 8. Auto-refresh loop: re-login when the auth cookie approaches expiry
+  const refreshInterval = Math.max(60_000, config.refreshMarginSec * 1000);
+  const refreshTimer = setInterval(async () => {
+    const account = credentials.primary();
+    if (!account) {
+      log.error("refresh", "no usable account; attempting to recover", { error: credentials.lastLoginError });
+      await ensureUsableAccount().catch(() => undefined);
+      return;
+    }
+    if (!credentials.needsRefresh(account, config.refreshMarginSec)) return;
+    log.info("refresh", "cookie near expiry; re-logging in", {
+      account: account.email,
+      expiry: credentials.expirySummary(account),
+    });
+    await ensureUsableAccount().catch(() => undefined);
   }, refreshInterval);
   refreshTimer.unref?.();
 

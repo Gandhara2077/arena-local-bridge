@@ -42,7 +42,15 @@ export class CredentialStore {
 
   /** Ensure credentials exist: migrate from omni (opt-in), otherwise a clear error. */
   ensure({ migrateFromOmni = false } = {}) {
-    if (this.primary()) return this.primary();
+    const primary = this.primary();
+    if (primary) return primary;
+    if (this.accounts.length) {
+      // Accounts exist but all were rejected — say WHY, not "no credentials".
+      this.lastLoginError =
+        `All ${this.accounts.length} Arena account(s) are unusable: ` +
+        this.accounts.map((a) => `${a.email} (${a.lastError || "unknown"})`).join("; ");
+      throw new Error(this.lastLoginError);
+    }
     if (migrateFromOmni && this.omniDbPath) {
       const migrated = this.#migrateFromOmni();
       if (migrated) return migrated;
@@ -62,7 +70,12 @@ export class CredentialStore {
           ? encrypt(JSON.stringify({ email: String(email), password }), this.key)
           : existing?.loginSecret || "",
       updatedAt: new Date().toISOString(),
-      priority: Number(priority) || 1,
+      // NOT `Number(priority) || 1`: that made priority 0 unusable (0 is falsy),
+      // so nothing could ever outrank the first account.
+      priority: Number.isFinite(Number(priority)) ? Number(priority) : 1,
+      // A fresh upsert means a login just worked, so clear any prior rejection.
+      disabled: false,
+      lastError: null,
     };
     if (existing) Object.assign(existing, entry);
     else this.accounts.push(entry);
@@ -76,15 +89,95 @@ export class CredentialStore {
     if (!account) return false;
     account.cookieHeader = this.#encryptCookie(String(cookieHeader));
     account.updatedAt = new Date().toISOString();
+    // A cookie that just refreshed proves the account works again.
+    account.disabled = false;
+    account.lastError = null;
     this.save();
     return true;
   }
 
-  /** Consumers get a shallow copy with the cookieHeader decrypted. */
+  /** Order accounts by priority (then file order). Disabled ones sort last. */
+  #ordered() {
+    return [...this.accounts].sort((a, b) => {
+      const da = a.disabled ? 1 : 0;
+      const db = b.disabled ? 1 : 0;
+      if (da !== db) return da - db;
+      return Number(a.priority ?? 1) - Number(b.priority ?? 1);
+    });
+  }
+
+  /**
+   * The account to use: highest priority that has not been rejected. Returns
+   * null when every account is disabled — callers should surface lastLoginError
+   * rather than silently driving a dead session.
+   */
   primary() {
-    const account = [...this.accounts].sort((a, b) => Number(a.priority || 1) - Number(b.priority || 1))[0];
-    if (!account) return null;
-    return { ...account, cookieHeader: decrypt(account.cookieHeader, this.key) };
+    const enabled = this.#ordered().filter((a) => !a.disabled);
+    if (!enabled.length) return null;
+    return { ...enabled[0], cookieHeader: decrypt(enabled[0].cookieHeader, this.key) };
+  }
+
+  /**
+   * Next usable account other than the ones already tried, or null. Used to
+   * fail over when the current account turns out to be restricted.
+   */
+  selectNext(exclude = []) {
+    const skip = new Set(exclude.map((e) => String(e).toLowerCase()));
+    const next = this.#ordered().find((a) => !a.disabled && !skip.has(a.email.toLowerCase()));
+    if (!next) return null;
+    return { ...next, cookieHeader: decrypt(next.cookieHeader, this.key) };
+  }
+
+  /** Reject an account (login failed, or the session is not actually usable). */
+  disable(email, reason = "") {
+    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    if (!account) return false;
+    account.disabled = true;
+    account.lastError = String(reason || "disabled");
+    account.disabledAt = new Date().toISOString();
+    this.lastLoginError = `${account.email}: ${account.lastError}`;
+    this.save();
+    log.warn("credentials", "account disabled", { account: maskEmail(account.email), reason: account.lastError });
+    return true;
+  }
+
+  enable(email) {
+    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    if (!account) return false;
+    account.disabled = false;
+    account.lastError = null;
+    this.save();
+    return true;
+  }
+
+  setPriority(email, priority) {
+    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    if (!account) return false;
+    account.priority = Number.isFinite(Number(priority)) ? Number(priority) : 1;
+    this.save();
+    return true;
+  }
+
+  /** Safe summary for /health and operator tools. Never includes cookie values. */
+  list() {
+    return this.#ordered().map((a) => ({
+      email: a.email,
+      priority: Number(a.priority ?? 1),
+      updatedAt: a.updatedAt || null,
+      hasPassword: Boolean(a.loginSecret),
+      disabled: Boolean(a.disabled),
+      lastError: a.lastError || null,
+      // One unreadable cookie must not take /health down with it.
+      cookieExpirySeconds: this.#expiryOf(a),
+    }));
+  }
+
+  #expiryOf(account) {
+    try {
+      return secondsToExpiry(decrypt(account.cookieHeader, this.key));
+    } catch {
+      return null;
+    }
   }
 
   #encryptCookie(header) {

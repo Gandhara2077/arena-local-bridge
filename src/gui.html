@@ -266,6 +266,44 @@
   #toast.err { background: #a13b33; border-color: #8a2f28; }
   #toast.err .ico { color: #ffd2ce; }
 
+  /* ── ModelPool board ─────────────────────────────────────────────────── */
+  .poolbar { display: flex; gap: 8px; align-items: center; margin: 0 0 10px; flex-wrap: wrap; }
+  .poolbar input[type="search"] {
+    flex: 1 1 180px; min-width: 140px; padding: 6px 10px; font-size: 12.5px; font-family: inherit;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+  }
+  .poolbar select {
+    padding: 6px 8px; font-size: 12.5px; font-family: inherit;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+  }
+  .pool { border: 1px solid var(--line); border-radius: 12px; background: var(--card); margin-bottom: 8px; overflow: hidden; }
+  .pool-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; user-select: none; }
+  .pool-head:hover { background: #f4f9f5; }
+  .pool-caret { color: var(--dim); display: flex; transition: transform .15s ease; }
+  .pool.caret-open .pool-caret { transform: rotate(90deg); }
+  .pool-name { font-size: 13.5px; font-weight: 700; color: var(--ink); flex: 0 1 auto; word-break: break-all; }
+  .pool-name.unresolved { color: #8a6d1f; }
+  .pool-metrics { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; align-items: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600;
+    padding: 2px 8px; border-radius: 999px; background: #eef5f0; color: #265743; border: 1px solid #dbe8de;
+    white-space: nowrap;
+  }
+  .badge.warn { background: #fdf5e6; color: #8a6d1f; border-color: #f0e2c2; }
+  .badge.dead { background: #fbeeec; color: #a13b33; border-color: #f2d6d2; }
+  .badge.dim { background: #f2f5f3; color: var(--dim); border-color: var(--line); }
+  .pool-body { display: none; padding: 0 12px 12px; }
+  .pool.caret-open .pool-body { display: block; }
+  .pool-meta { font-size: 11.8px; color: var(--dim); margin: 0 0 8px; line-height: 1.6; }
+  .pool-sub { border-top: 1px dashed var(--line); margin-top: 4px; }
+
+  /* ── Session bindings ────────────────────────────────────────────────── */
+  .bidrow { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .bidrow:last-child { border-bottom: 0; }
+  .bidid { font-size: 12.3px; font-weight: 600; color: var(--ink); word-break: break-all; margin-bottom: 4px; }
+  .bidmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .bidmeta .uuid { margin: 0; }
+
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #cbdccf; border-radius: 8px; border: 2px solid var(--bg); }
@@ -312,7 +350,7 @@
         <path d="M12 9v4" /><path d="M12 17h.01" />
       </svg>
     </span>
-    <div>提示：bridge 用<b>一次性临时账号</b>在自带的有头浏览器里驱动 session；你本机浏览器是<b>另一个账号</b>。所以<b>不要在自己浏览器里打开这些 session</b>。驱动对话请走下面的 API / Proxy。</div>
+    <div>提示：bridge 用<b>你登录时保存的那个 Arena 账号</b>（长期账号，过期会自动续期）在自带的有头浏览器里驱动 session；你本机浏览器可能是<b>另一个账号</b>。所以<b>不要在自己浏览器里打开这些 session</b>。驱动对话请走下面的 API / Proxy。</div>
   </div>
 
   <!-- ══════════ PAGE: 归档 / 连接 ══════════ -->
@@ -341,6 +379,16 @@
           <button class="btn-ghost btn-sm" id="selAll">全选</button>
           <button class="btn-ghost btn-sm" id="selNone">清空</button>
           <span class="muted" id="selCount">已选 0 个</span>
+        </div>
+        <div class="poolbar">
+          <input type="search" id="poolSearch" placeholder="搜索模型 / UUID / 账号" aria-label="搜索模型池" />
+          <select id="poolSort" aria-label="排序方式">
+            <option value="count">按可用条数</option>
+            <option value="used">按最近使用</option>
+            <option value="collected">按采集时间</option>
+            <option value="name">按模型名</option>
+          </select>
+          <span class="muted" id="poolCount"></span>
         </div>
         <div id="sessions">
           <div class="skeleton"></div>
@@ -395,6 +443,20 @@
               停止并收回
             </button>
           </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><path d="M8 12h8"/>
+                </svg>
+              </span>
+              <h2>会话绑定</h2>
+            </div>
+          </div>
+          <div id="bindings"></div>
         </section>
       </div>
     </div>
@@ -505,6 +567,7 @@ const ICON = {
   inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/></svg>',
   bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
   plug: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6Z"/><path d="M12 17v5"/></svg>',
+  chev: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
 };
 
 async function api(path, opts) {
@@ -557,6 +620,20 @@ function wire(root) {
       syncPickRows();
     });
   });
+  root.querySelectorAll(".verify-btn").forEach((b) => {
+    b.addEventListener("click", () => verifySession(b));
+  });
+  root.querySelectorAll(".reprobe-btn").forEach((b) => {
+    b.addEventListener("click", () => reprobeSession(b));
+  });
+  root.querySelectorAll(".unbind-btn").forEach((b) => {
+    b.addEventListener("click", () => unbindBinding(b.dataset.client));
+  });
+  root.querySelectorAll(".pool-head").forEach((h) => {
+    h.addEventListener("click", () => {
+      h.parentElement.classList.toggle("caret-open");
+    });
+  });
 }
 
 function updateSelCount() {
@@ -604,9 +681,10 @@ async function render() {
   btn.disabled = true;
   try {
     const [sessions, status] = await Promise.all([api("/api/sessions"), api("/api/status")]);
+    BRIDGE_KEY = status.apiKey || BRIDGE_KEY;
     renderSessions(sessions, status);
     renderConn(status);
-    BRIDGE_KEY = status.apiKey || BRIDGE_KEY;
+    await renderBindings();
   } catch (e) {
     $("#sessions").innerHTML = emptyState(ICON.bolt, "读取失败", "无法连接本地 bridge：" + escapeHtml(e.message));
     $("#conn").innerHTML = "";
@@ -616,39 +694,187 @@ async function render() {
   await mcpRender();
 }
 
-function renderSessions(sessions, status) {
-  const list = sessions.sessions || [];
+// ── ModelPool board ────────────────────────────────────────────────────────
+// The pool is an INDEX over sessions, not a scheduler: it never picks one for
+// you, because conversation context lives on one specific Arena session and
+// switching silently would drop it. 未识别 is a missing Model, not a Model.
+let GROUPS = [];
+let POOL_QUERY = "";
+let POOL_SORT = "count";
+let LAST_PAYLOAD = null;
+let LAST_STATUS = null;
+let poolControlsWired = false;
+
+function shortTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function poolMatches(g, needle) {
+  if (!needle) return true;
+  return (
+    String(g.model || "").toLowerCase().includes(needle) ||
+    (g.accounts || []).some((a) => String(a).toLowerCase().includes(needle)) ||
+    (g.sessions || []).some((s) => String(s.sessionId).toLowerCase().includes(needle))
+  );
+}
+
+function sortGroups(groups, mode) {
+  const arr = [...groups];
+  const byName = (a, b) => String(a.model).localeCompare(String(b.model));
+  let sorted;
+  if (mode === "name") sorted = arr.sort(byName);
+  else if (mode === "used") {
+    sorted = arr.sort((a, b) => String(b.lastUsedAt || "").localeCompare(String(a.lastUsedAt || "")) || byName(a, b));
+  } else if (mode === "collected") {
+    sorted = arr.sort((a, b) => String(b.lastCollectedAt || "").localeCompare(String(a.lastCollectedAt || "")) || byName(a, b));
+  } else {
+    sorted = arr.sort((a, b) => b.ok - a.ok || byName(a, b));
+  }
+  // 未识别 is a missing Model, not a Model — never let it sort between real ones.
+  return [...sorted.filter((g) => !g.unresolved), ...sorted.filter((g) => g.unresolved)];
+}
+
+function sessionCard(s, active) {
+  const isActive = s.sessionId === active;
+  const dead = s.state === "suspected-dead";
+  // Comes from the pool grouping; the GUI never re-derives "未识别" itself.
+  const unresolved = !!s.unresolved;
+  return `
+    <article class="card ${isActive ? "active" : ""}" id="card-${s.sessionId}">
+      <div class="sc-head">
+        <input type="checkbox" class="pick" data-sid="${escapeHtml(s.sessionId)}" ${SELECTED.has(s.sessionId) ? "checked" : ""} aria-label="选择" />
+        <span class="name">${escapeHtml(s.model || s.title)}</span>
+        ${dead ? '<span class="badge dead">疑似失效</span>' : ""}
+        ${isActive ? '<span class="pill">当前选用</span>' : ""}
+      </div>
+      <div class="meta">${escapeHtml(s.title || "")}${s.email ? " · " + escapeHtml(s.email) : ""}${s.collectedAt ? " · " + escapeHtml(s.collectedAt) : ""}${s.lastUsedAt ? " · 用过 " + escapeHtml(shortTime(s.lastUsedAt)) : ""}</div>
+      <div class="uuid">${escapeHtml(s.sessionId)}</div>
+      <div class="sc-actions">
+        <button class="${isActive ? "btn-ghost" : "btn-primary"} btn-sm choose-btn" data-sid="${escapeHtml(s.sessionId)}" ${isActive ? "disabled" : ""}>
+          ${isActive ? ICON.check + "<span>正在使用</span>" : ICON.plug + "<span>选用此模型</span>"}
+        </button>
+        <button class="btn-ghost btn-sm verify-btn" data-sid="${escapeHtml(s.sessionId)}">体检</button>
+        ${unresolved ? `<button class="btn-ghost btn-sm reprobe-btn" data-sid="${escapeHtml(s.sessionId)}">补标</button>` : ""}
+      </div>
+      <div class="sc-url">Arena URL（仅供参考，<b>勿在你自己浏览器打开</b>）：<br>${escapeHtml(s.url)}</div>
+    </article>`;
+}
+
+function poolCard(g, active) {
+  const unresolved = !!g.unresolved;
+  const badges = [
+    // In the 未识别 bucket every entry is a missing Model, so "可用 N" would be
+    // a lie — it is the count of sessions still awaiting 补标.
+    unresolved ? `<span class="badge warn">待补标 ${g.total}</span>` : `<span class="badge">可用 ${g.ok}</span>`,
+    g.suspectedDead ? `<span class="badge dead">疑似失效 ${g.suspectedDead}</span>` : "",
+    g.lastUsedAt ? `<span class="badge dim">用过 ${escapeHtml(shortTime(g.lastUsedAt))}</span>` : "",
+    g.lastCollectedAt ? `<span class="badge dim">采集 ${escapeHtml(g.lastCollectedAt)}</span>` : "",
+  ].join("");
+  const accounts = (g.accounts || []).length ? escapeHtml(g.accounts.join("、")) : "—";
+  return `
+    <div class="pool caret-open" data-model="${escapeHtml(g.model)}">
+      <div class="pool-head">
+        <span class="pool-caret">${ICON.chev}</span>
+        <span class="pool-name ${unresolved ? "unresolved" : ""}">${escapeHtml(g.model)}</span>
+        ${unresolved ? '<span class="badge warn">待补标</span>' : ""}
+        <span class="pool-metrics">${badges}</span>
+      </div>
+      <div class="pool-body">
+        <div class="pool-meta">账号：${accounts} · ${g.total} 条 session</div>
+        <div class="pool-sub">${(g.sessions || []).map((s) => sessionCard(s, active)).join("")}</div>
+      </div>
+    </div>`;
+}
+
+function renderSessions(payload, status) {
+  const list = payload.sessions || [];
   SESSIONS.length = 0;
   list.forEach((s) => SESSIONS.push(s));
+  LAST_PAYLOAD = payload;
+  LAST_STATUS = status;
+  GROUPS = payload.groups || [];
+  renderPools(payload, status);
+}
+
+function renderPools(payload, status) {
   const box = $("#sessions");
-  if (!list.length) {
+  const needle = POOL_QUERY.trim().toLowerCase();
+  const counter = $("#poolCount");
+  if (counter) {
+    counter.textContent =
+      `${GROUPS.length} 个模型池 · ${SESSIONS.length} 条 session` + (needle ? ` · 筛出 ${GROUPS.filter((g) => poolMatches(g, needle)).length}` : "");
+  }
+  if (!GROUPS.length) {
     box.innerHTML = emptyState(ICON.inbox, "未读到 session",
-      `请确认 <code>ARENA_ARCHIVE_DIR</code> 指向「模型归档」目录（含 记录.json）。<br>当前：${escapeHtml(sessions.archiveDir || "(未设置)")}`);
+      `请确认 <code>ARENA_ARCHIVE_DIR</code> 指向「模型归档」目录（含 记录.json）。<br>当前：${escapeHtml((payload && payload.archiveDir) || "(未设置)")}`);
   } else {
-    const active = status.activeSession;
-    box.innerHTML = list.map((s) => {
-      const isActive = s.sessionId === active;
-      return `
-        <article class="card ${isActive ? "active" : ""}" id="card-${s.sessionId}">
-          <div class="sc-head">
-            <input type="checkbox" class="pick" data-sid="${escapeHtml(s.sessionId)}" ${SELECTED.has(s.sessionId) ? "checked" : ""} aria-label="选择" />
-            <span class="name">${escapeHtml(s.model || s.title)}</span>
-            ${isActive ? '<span class="pill">当前选用</span>' : ""}
-          </div>
-          <div class="meta">${escapeHtml(s.title || "")}${s.email ? " · " + escapeHtml(s.email) : ""}${s.collectedAt ? " · " + escapeHtml(s.collectedAt) : ""}</div>
-          <div class="uuid">${escapeHtml(s.sessionId)}</div>
-          <div class="sc-actions">
-            <button class="${isActive ? "btn-ghost" : "btn-primary"} btn-sm choose-btn" data-sid="${escapeHtml(s.sessionId)}" ${isActive ? "disabled" : ""}>
-              ${isActive ? ICON.check + "<span>正在使用</span>" : ICON.plug + "<span>选用此模型</span>"}
-            </button>
-          </div>
-          <div class="sc-url">Arena URL（仅供参考，<b>勿在你自己浏览器打开</b>）：<br>${escapeHtml(s.url)}</div>
-        </article>`;
-    }).join("");
+    const groups = sortGroups(GROUPS.filter((g) => poolMatches(g, needle)), POOL_SORT);
+    box.innerHTML = groups.length
+      ? groups.map((g) => poolCard(g, status && status.activeSession)).join("")
+      : emptyState(ICON.inbox, "没有匹配的模型池", `没有模型 / UUID / 账号匹配「${escapeHtml(POOL_QUERY)}」。`);
   }
   wire(box);
+  wirePoolControls();
   renderPickList();
   updateSelCount();
+}
+
+function wirePoolControls() {
+  if (poolControlsWired) return;
+  const q = $("#poolSearch");
+  const s = $("#poolSort");
+  if (q) q.addEventListener("input", () => { POOL_QUERY = q.value; renderPools(LAST_PAYLOAD, LAST_STATUS); });
+  if (s) s.addEventListener("change", () => { POOL_SORT = s.value; renderPools(LAST_PAYLOAD, LAST_STATUS); });
+  poolControlsWired = Boolean(q || s);
+}
+
+async function verifySession(btn) {
+  const sid = btn.dataset.sid;
+  const html = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    const r = await mcpApi("/api/pool/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: sid }),
+    });
+    if (r && r.error) toast("体检失败：" + r.error.message, true);
+    else toast(r && r.alive ? "存活" : "疑似失效（已标记）", !(r && r.alive));
+  } catch (e) {
+    toast("体检失败：" + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = html;
+    await render();
+  }
+}
+
+async function reprobeSession(btn) {
+  const sid = btn.dataset.sid;
+  const html = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    const r = await mcpApi("/api/pool/reprobe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: sid }),
+    });
+    if (r && r.error) toast("补标失败：" + r.error.message, true);
+    else if (r && r.ok) toast("已识别为 " + r.model);
+    else toast("仍未识别到模型", true);
+  } catch (e) {
+    toast("补标失败：" + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = html;
+    await render();
+  }
 }
 
 function renderPickList() {
@@ -673,6 +899,48 @@ async function choose(sessionId) {
     toast(r && r.ok ? "已选用该模型" : "选用失败：" + (r?.error?.message || "未知错误"), !(r && r.ok));
   } catch (e) {
     toast("选用失败：" + e.message, true);
+  }
+  await render();
+}
+
+async function renderBindings() {
+  const box = $("#bindings");
+  if (!box) return;
+  let data;
+  try {
+    data = await mcpApi("/api/pool/bindings");
+  } catch (e) {
+    box.innerHTML = emptyState(ICON.inbox, "读取失败", escapeHtml(e.message));
+    return;
+  }
+  const list = (data && data.bindings) || [];
+  if (!list.length) {
+    box.innerHTML = emptyState(ICON.inbox, "暂无绑定",
+      "客户端显式把某条 session 的 UUID 当 model 传进来时才会建立绑定，之后它会固定回到那条 session，直到你在这里解除。");
+    return;
+  }
+  box.innerHTML = list.map((b) => `
+    <div class="bidrow">
+      <div class="bidid">${escapeHtml(b.clientId)}</div>
+      <div class="bidmeta">
+        <span class="uuid">${escapeHtml(b.sessionId)}</span>
+        ${b.state === "suspected-dead" ? '<span class="badge dead">疑似失效</span>' : '<span class="badge">正常</span>'}
+      </div>
+      <button class="btn-ghost btn-sm unbind-btn" data-client="${escapeHtml(b.clientId)}">解除绑定</button>
+    </div>`).join("");
+  wire(box);
+}
+
+async function unbindBinding(clientId) {
+  try {
+    const r = await mcpApi("/api/pool/unbind", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId }),
+    });
+    toast(r && r.ok ? "已解除绑定" : "解除失败：" + ((r && r.error && r.error.message) || "未知错误"), !(r && r.ok));
+  } catch (e) {
+    toast("解除失败：" + e.message, true);
   }
   await render();
 }

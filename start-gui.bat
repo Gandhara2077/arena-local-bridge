@@ -11,6 +11,10 @@ set "ARENA_ARCHIVE_DIR="
 if exist "%~dp0archive-dir.txt" (
   for /f "delims=" %%p in ('powershell -NoProfile -Command "Get-Content -LiteralPath %~dp0archive-dir.txt -Encoding UTF8"') do set "ARENA_ARCHIVE_DIR=%%p"
 )
+set "ARENA_MCP_WORKSPACE="
+if exist "%~dp0mcp-workspace.txt" (
+  for /f "delims=" %%p in ('powershell -NoProfile -Command "Get-Content -LiteralPath %~dp0mcp-workspace.txt -Encoding UTF8"') do set "ARENA_MCP_WORKSPACE=%%p"
+)
 cd /d "%~dp0"
 echo Starting arena-bridge GUI on http://127.0.0.1:20140/
 echo Logs are written to: %DATA_DIR%\bridge.log

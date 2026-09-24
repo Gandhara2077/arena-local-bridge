@@ -179,6 +179,19 @@ export class ArenaBrowser {
       const cookies = await context.cookies("https://arena.ai");
       const auth = cookies.filter((c) => c.name.startsWith("arena-auth-prod-v1"));
       if (auth.length === 0) throw new Error("Arena login returned no auth cookie");
+      // A 200 + an auth cookie is NOT proof the session works. Arena returns
+      // both for a restricted account and then serves it as logged out, which
+      // used to make this method report success for an account that could not
+      // drive a single session — and the auto-refresh loop kept "fixing" it.
+      if (!(await this.sessionIsUsable(page, email))) {
+        throw Object.assign(
+          new Error(
+            `Arena signed in as ${email} but the session is not usable ` +
+              "(/agent does not render as this account — most likely the account is restricted)"
+          ),
+          { code: "session_not_usable" }
+        );
+      }
       const cookieHeader = cookies
         .filter((c) => c.domain.endsWith("arena.ai"))
         .map((c) => `${c.name}=${c.value}`)
@@ -186,6 +199,24 @@ export class ArenaBrowser {
       return { email, cookieHeader, password };
     } finally {
       await context.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Is the signed-in session actually usable? When Arena accepts the account it
+   * renders /agent with that account's own email in the server payload; when it
+   * has quietly restricted the account, the same request renders as a visitor
+   * and the email never appears. Verified against a known-restricted account
+   * and a known-good one — the signal flips between them.
+   */
+  async sessionIsUsable(page, email) {
+    try {
+      const html = await page.evaluate(async () =>
+        (await fetch("/agent", { headers: { Accept: "text/html" } })).text()
+      );
+      return String(html).toLowerCase().includes(String(email).toLowerCase());
+    } catch {
+      return false;
     }
   }
 

@@ -92,6 +92,20 @@ export function loadConfig(env = {}, { requireBridgeKey = true } = {}) {
     mcpEndpointFile: env.ARENA_MCP_ENDPOINT_FILE || path.join(dataDir, "mcp-endpoint.json"),
     // §4.26 — folder holding agentdock.exe + cloudflared.exe (GUI 一键启动用)
     agentdockDir: env.ARENA_AGENTDOCK_DIR || detectAgentdockDir(),
+    // Which local directory this conversation is about. The MCP preamble tells
+    // the Arena agent to write generated files here — without it, AgentDock's
+    // relative paths resolve to ~/AgentDock, which is not the user's project.
+    // Unset => the preamble simply omits the workspace line.
+    mcpWorkspace: String(env.ARENA_MCP_WORKSPACE || "").trim(),
+    // Codex writes one transcript per conversation under here, carrying both the
+    // session id (which Codex sends as x-codex-session-id) and the working
+    // directory it ran in — enough to recover a conversation's workspace with no
+    // client-side configuration.
+    codexSessionsDir: env.ARENA_CODEX_SESSIONS_DIR || path.join(os.homedir(), ".codex", "sessions"),
+    // How recently a Codex transcript must have been written to be treated as
+    // "the conversation calling us right now". Only used when exactly one
+    // transcript falls inside the window — see resolveRecentCodexWorkspace.
+    codexRecentWindowMs: Number(env.ARENA_CODEX_RECENT_WINDOW_MS || 120_000),
     migrateFromOmni: String(env.ARENA_MIGRATE_FROM_OMNI ?? "0") === "1",
     profile: loadProfile(path.join(dataDir, "profile.json")),
   };

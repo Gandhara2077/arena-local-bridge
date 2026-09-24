@@ -8,13 +8,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+// The "no Model identified" sentinel is a property of the archive format, so it
+// is declared once (in pool.mjs) and shared, rather than retyped in three files.
+import { UNRESOLVED } from "./pool.mjs";
 
 const ILLEGAL = /[\\/:*?"<>|\u0000-\u001f]/g;
+const UNRESOLVED_FOLDER = `${UNRESOLVED}（未捕获本轮 run 令牌，探针仍停留在上一轮）`;
 
 /** Turn a model name into a Windows-safe folder name (helper uses `_` for `/`). */
 export function modelFolderName(model) {
   const raw = String(model || "").trim();
-  if (!raw) return "未识别（未捕获本轮 run 令牌，探针仍停留在上一轮）";
+  if (!raw) return UNRESOLVED_FOLDER;
   return raw.replace(ILLEGAL, "_").slice(0, 120);
 }
 
@@ -61,11 +65,11 @@ export function appendEntry(archiveDir, entry) {
   const now = new Date();
   const model = String(entry.model || "").trim();
   const folder = modelFolderName(model);
-  const title = `${model || "未识别"} · ${shortStamp(now)}`;
+  const title = `${model || UNRESOLVED} · ${shortStamp(now)}`;
   const record = {
     Id: String(entry.sessionId || "").replace(/-/g, "").slice(0, 32) || crypto.randomBytes(16).toString("hex"),
     Title: title,
-    Model: model || "未识别",
+    Model: model || UNRESOLVED,
     Url: entry.url || "",
     Profile: entry.profile || "arena-bridge",
     Email: entry.email || "",
@@ -88,6 +92,31 @@ export function appendEntry(archiveDir, entry) {
   writeModelIndex(archiveDir, folder, model);
   writeSummary(archiveDir, entries);
   return record;
+}
+
+/**
+ * 补标 — set the Model of an ALREADY archived session, then refresh the indexes.
+ * Used when a session was archived as 未识别 and a later probe identifies it.
+ * Returns the updated record, or null when no entry carries that session id.
+ */
+export function updateModel(archiveDir, sessionId, model) {
+  const entries = readEntries(archiveDir);
+  const needle = String(sessionId || "").toLowerCase();
+  const idx = entries.findIndex((e) => String(e.Url || "").toLowerCase().includes(`/agent/${needle}`));
+  if (idx < 0) return null;
+  const next = String(model || "").trim();
+  const prev = entries[idx];
+  const folder = modelFolderName(next);
+  const prevFolder = prev.ModelFolder;
+  // Keep the original "MM-DD HH:mm" tail; only the Model prefix changes.
+  const title = String(prev.Title || "");
+  const tail = title.includes(" · ") ? title.split(" · ").slice(1).join(" · ") : title;
+  entries[idx] = { ...prev, Model: next || UNRESOLVED, ModelFolder: folder, Title: `${next || UNRESOLVED} · ${tail}` };
+  writeJsonAtomic(path.join(archiveDir, "记录.json"), entries);
+  writeModelIndex(archiveDir, folder, next);
+  if (prevFolder && prevFolder !== folder) writeModelIndex(archiveDir, prevFolder, prev.Model);
+  writeSummary(archiveDir, entries);
+  return entries[idx];
 }
 
 /** Per-model 清单.md — same shape the helper emits. */

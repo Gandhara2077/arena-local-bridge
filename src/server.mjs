@@ -15,11 +15,73 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./util.mjs";
 import { AgentDockManager } from "./agentdock.mjs";
-import { stats as archiveStats } from "./archive.mjs";
+import { stats as archiveStats, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
+import { installProbe, readModelFromPage } from "./probe.mjs";
+import {
+  bind,
+  clientSessionId,
+  emptyState,
+  groupSessions,
+  markDead,
+  markOk,
+  markUsed,
+  resolveBinding,
+  unbind,
+} from "./pool.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── ModelPool state ───────────────────────────────────────────────────────
+// 记录.json stays the single source of truth for session BUSINESS data. This
+// sidecar only holds derived state (ok / suspected-dead, last used, bindings).
+// It is disposable: delete it and every session simply reads as `ok` again.
+function poolStateFile(config) {
+  return path.join(config.dataDir, "pool-state.json");
+}
+
+function loadPoolState(config) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(poolStateFile(config), "utf8"));
+    if (parsed && typeof parsed === "object" && parsed.sessions && parsed.bindings) {
+      // A sidecar from a future/older shape would be silently misread; drop it.
+      if (parsed.version === emptyState().version) return parsed;
+    }
+  } catch {
+    /* missing or corrupt sidecar: start clean */
+  }
+  return emptyState();
+}
+
+/** The one place the "nothing picked in the GUI" 409 is worded. */
+function noActiveSessionError() {
+  return Object.assign(
+    new Error(
+      'No active session selected. Open the GUI (http://127.0.0.1:20140/), click "选用此模型" on a session, ' +
+        'then retry — or pass model as that session UUID directly. Note: model:"active" only works after a session is selected.'
+    ),
+    { status: 409, code: "no_active_session" }
+  );
+}
+
+/** The shared browser page for operator actions (caller drives the navigation). */
+async function sessionPageFor(bridge) {
+  const credential = bridge.credentials?.primary?.() || null;
+  return bridge.browser.getPage(credential?.cookieHeader || "", credential?.updatedAt);
+}
+
+function busyError() {
+  return { error: { message: "A turn is in flight; retry when it finishes.", code: "busy" } };
+}
+
+function savePoolState(config, state) {
+  const file = poolStateFile(config);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 1), "utf8");
+  fs.renameSync(tmp, file);
+}
 
 /**
  * Read the Arena模型助手 "模型归档/记录.json" and return the usable sessions.
@@ -140,6 +202,11 @@ export function createServer({ bridge, config }) {
   // The session currently selected in the GUI as the "active" model provider.
   // Clients may use model: "active" (or omit model) to target it.
   let activeSession = String(config.arenaSessions || "").split(",").map((s) => s.trim()).filter(Boolean)[0] || "";
+  // Derived ModelPool state (health + bindings). See poolStateFile() above.
+  let poolState = loadPoolState(config);
+  // Turns currently being driven by the bridge. Manual health checks must not
+  // navigate the shared browser page while one is running.
+  let turnsInFlight = 0;
 
   // 连抽 (session harvesting) + 批量测试. Both are LOCAL operator tools and sit
   // behind the bridge key below; the status endpoints are read-only but still
@@ -188,7 +255,13 @@ export function createServer({ bridge, config }) {
     if (url.pathname === "/api/sessions") {
       const sessions = readArchiveSessions(config.archiveDir);
       batch.sessions = sessions;
-      return json(res, 200, { archiveDir: config.archiveDir, sessions });
+      // `groups` is the ModelPool view: the same sessions, organised by Model,
+      // with 未识别 in its own bucket. Derived, never stored.
+      return json(res, 200, {
+        archiveDir: config.archiveDir,
+        sessions,
+        groups: groupSessions(sessions, poolState),
+      });
     }
     // Read-only aggregate for the GUI overview (model count / per-model counts).
     if (url.pathname === "/api/archive/stats") {
@@ -230,6 +303,88 @@ export function createServer({ bridge, config }) {
     // §4.26 — one-click local MCP bridge (AgentDock + cloudflared tunnel).
     if (url.pathname === "/api/mcp/status") {
       return json(res, 200, await agentdock.status());
+    }
+
+    // ── ModelPool actions (operator-initiated, so they go behind the key) ───
+    // Which client conversations are currently pinned to which Session. The GUI
+    // shows these so a binding can be inspected and dropped by hand.
+    if (url.pathname === "/api/pool/bindings") {
+      const bindings = Object.entries(poolState.bindings || {}).map(([clientId, b]) => ({
+        clientId,
+        sessionId: b.sessionId,
+        boundAt: b.boundAt || null,
+        state: poolState.sessions?.[b.sessionId]?.state || "ok",
+      }));
+      return json(res, 200, { bindings });
+    }
+    // Drop a Binding so the client falls back to the GUI-selected session.
+    if (req.method === "POST" && url.pathname === "/api/pool/unbind") {
+      try {
+        const body = await readBody(req);
+        const clientId = String(body.clientId || "").trim();
+        if (!clientId) return json(res, 400, { error: { message: "clientId is required" } });
+        poolState = unbind(poolState, clientId);
+        savePoolState(config, poolState);
+        return json(res, 200, { ok: true });
+      } catch (error) {
+        return json(res, 400, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    }
+    // 体检 — a page that merely renders is not proof a session can still answer,
+    // so this drives one real turn. The nonce makes the probe unique: the bridge
+    // serves identical (session + prompt) pairs from its idempotency cache, so a
+    // fixed probe string would look "alive" forever without ever reaching Arena.
+    // Note this DOES append one short message to that session's transcript.
+    if (req.method === "POST" && url.pathname === "/api/pool/verify") {
+      try {
+        const body = await readBody(req);
+        const sid = String(body.sessionId || "").trim();
+        if (!isSessionId(sid)) return json(res, 400, { error: { message: "sessionId must be a UUID" } });
+        if (turnsInFlight > 0) return json(res, 409, busyError());
+        const probe = `[arena-bridge health check ${crypto.randomBytes(4).toString("hex")}] Reply with just: OK`;
+        let alive = false;
+        let failure = null;
+        turnsInFlight += 1;
+        try {
+          const payload = await bridge.converse(sid, { messages: [{ role: "user", content: probe }] }, { injectMcp: false });
+          alive = Array.isArray(payload?.choices) && payload.choices.length > 0;
+        } catch (error) {
+          failure = error instanceof Error ? error.message : String(error);
+        } finally {
+          turnsInFlight -= 1;
+        }
+        poolState = alive
+          ? markOk(poolState, sid)
+          : markDead(poolState, sid, new Date().toISOString());
+        savePoolState(config, poolState);
+        log.info("server", "pool verify", { sessionId: sid, alive });
+        return json(res, 200, { ok: true, sessionId: sid, alive, error: failure });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    }
+    // 补标 — re-run the probe against an existing session and, if a Model is
+    // finally identified, write it back into 记录.json (the source of truth).
+    if (req.method === "POST" && url.pathname === "/api/pool/reprobe") {
+      try {
+        const body = await readBody(req);
+        const sid = String(body.sessionId || "").trim();
+        if (!isSessionId(sid)) return json(res, 400, { error: { message: "sessionId must be a UUID" } });
+        if (turnsInFlight > 0) return json(res, 409, busyError());
+        // installProbe must run BEFORE the navigation: it uses addInitScript.
+        const page = await sessionPageFor(bridge);
+        await installProbe(page);
+        await page.goto(`https://arena.ai/agent/${sid}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+        const found = await readModelFromPage(page, { timeoutMs: 20_000 });
+        if (!found?.model) {
+          return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: found?.error || null });
+        }
+        const updated = updateModel(config.archiveDir, sid, found.model);
+        log.info("server", "pool reprobe", { sessionId: sid, model: found.model, updated: Boolean(updated) });
+        return json(res, 200, { ok: true, sessionId: sid, model: found.model, updated: Boolean(updated) });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
     }
 
     // ── 连抽 / 批量测试 ──────────────────────────────────────────────────
@@ -368,30 +523,66 @@ export function createServer({ bridge, config }) {
         return json(res, 400, { error: { message: validationError, type: "invalid_request_error", request_id: requestId } }, responseHeaders);
       }
       log.info("server", "chat completion request", { requestId, messages: body.messages.length, stream: body.stream === true });
+      // Which workspace hint arrived. Codex is expected to send its session id,
+      // which the bridge traces back to the directory that session ran in; when
+      // this is absent the workspace cannot be recovered at all, so it is worth
+      // seeing on every request rather than only when the MCP preamble injects.
+      log.info("server", "workspace hints", {
+        requestId,
+        codexSessionId: String(req.headers["x-codex-session-id"] || "").trim() || null,
+        workspaceHeader: String(req.headers["x-arena-workspace"] || "").trim() || null,
+        headersSeen: Object.keys(req.headers).filter((h) => h.startsWith("x-")).join(","),
+      });
       // Architecture split: a UUID `model` means "converse with this existing
       // Arena session" (converse-only, never creates a session — that is owned
       // by the Arena模型助手 real browser). model "active" (or omitted) targets
       // the session picked in the GUI. Any other non-UUID `model` falls back to
       // the legacy omni runAgent flow (which may create a session).
       const model = (body.model || "active").trim();
+      // Which conversation the caller thinks it is having, if it tells us.
+      const clientSid = clientSessionId(req.headers);
       let target = null;
       if (isSessionId(model)) {
         target = model;
+        // Passing a UUID is an explicit choice: remember it, so a later
+        // request that omits `model` lands on the same Session (and keeps
+        // its context) instead of drifting to whatever the GUI picked since.
+        if (clientSid) {
+          poolState = bind(poolState, clientSid, target, new Date().toISOString());
+          savePoolState(config, poolState);
+        }
       } else if (model === "active") {
         // "active" (or an omitted model) means "use the session picked in the
         // GUI". If nothing is picked, fail with a CLEAR, actionable 409 instead
         // of silently falling back to the legacy runAgent flow (which tries to
         // create a session and is blocked by reCAPTCHA — see §4.10/§4.11).
-        if (!activeSession) {
-          throw Object.assign(
-            new Error(
-              'No active session selected. Open the GUI (http://127.0.0.1:20140/), click "选用此模型" on a session, ' +
-                'then retry — or pass model as that session UUID directly. Note: model:"active" only works after a session is selected.'
-            ),
-            { status: 409, code: "no_active_session" }
-          );
+        if (clientSid) {
+          const bound = resolveBinding(poolState, clientSid);
+          if (bound.ok) {
+            target = bound.sessionId;
+          } else if (bound.code === "bound_session_dead") {
+            // Never substitute another Session: context lives on the bound one,
+            // so silently switching would answer with a different conversation.
+            throw Object.assign(
+              new Error(
+                `Your bound session ${bound.sessionId} is marked suspected-dead. ` +
+                  'Pick another session (GUI → 选用此模型, or pass its UUID as model), ' +
+                  `or POST /api/pool/unbind with clientId "${clientSid}" to drop the binding.`
+              ),
+              { status: 409, code: "bound_session_dead" }
+            );
+          } else {
+            // A Binding is only ever created by an EXPLICIT choice (passing a
+            // session UUID as `model`). "active" is not a choice, so it does
+            // not bind — otherwise a client that merely omits `model` would get
+            // frozen to whichever session the GUI happened to have selected.
+            if (!activeSession) throw noActiveSessionError();
+            target = activeSession;
+          }
+        } else {
+          if (!activeSession) throw noActiveSessionError();
+          target = activeSession;
         }
-        target = activeSession;
       }
       // Streaming clients get the SSE response opened IMMEDIATELY — before we
       // drive the (slow) Arena round-trip — plus a keep-alive heartbeat. Without
@@ -460,7 +651,20 @@ export function createServer({ bridge, config }) {
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         };
       } else if (target) {
-        payload = await bridge.converse(target, body, { onDelta });
+        turnsInFlight += 1;
+        try {
+          payload = await bridge.converse(target, body, { onDelta, headers: req.headers });
+          poolState = markUsed(poolState, target, new Date().toISOString());
+        } catch (error) {
+          // A real failure is the only trusted dead signal — never a timeout,
+          // never an age heuristic. See docs/agents + spec 0001.
+          poolState = markDead(poolState, target, new Date().toISOString());
+          savePoolState(config, poolState);
+          throw error;
+        } finally {
+          turnsInFlight -= 1;
+        }
+        savePoolState(config, poolState);
       } else {
         payload = await bridge.runAgent(body, req.headers);
       }

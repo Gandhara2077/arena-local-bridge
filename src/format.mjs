@@ -174,6 +174,23 @@ export function formatMessages(messages, includeTools, tools, profile) {
   return chunks.join("\n\n");
 }
 
+/**
+ * Headers a client uses to say "this request belongs to conversation X".
+ * Declared once: sessionKey() and pool.clientSessionId() must agree on the
+ * identity, or a binding would point at a different conversation than the one
+ * the rest of the bridge keys on.
+ */
+export const CLIENT_SESSION_HEADERS = ["x-codex-session-id", "x-session-id", "x-omniroute-session"];
+
+/** First non-empty value among `names`, or "". */
+export function firstHeader(headers, names) {
+  for (const name of names) {
+    const v = String(headers?.[name] || "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
 export function sessionKey(body, headers) {
   const metadata = record(body.metadata);
   let userSession = "";
@@ -185,9 +202,7 @@ export function sessionKey(body, headers) {
     }
   }
   const explicit =
-    headers["x-codex-session-id"] ||
-    headers["x-session-id"] ||
-    headers["x-omniroute-session"] ||
+    firstHeader(headers, CLIENT_SESSION_HEADERS) ||
     metadata.session_id ||
     metadata.sessionId ||
     userSession ||

@@ -20,6 +20,10 @@ mcp-*.json
 # 本地绝对路径（含用户名），可用环境变量 ARENA_ARCHIVE_DIR 覆盖
 archive-dir.txt
 
+# 本地 issue tracker（docs/agents/issue-tracker.md）。本仓库是公开仓库，
+# 议题与 spec 只留在本地，不随仓库分发
+.scratch/
+
 *.log
 /tmp/
 
