@@ -61,7 +61,7 @@ test("删除 removes the named session and leaves the others alone", () => {
   seed(dir, SID);
   seed(dir, OTHER, "gpt-5");
 
-  const { removed } = removeEntries(dir, [SID]);
+  const removed = removeEntries(dir, [SID]);
   assert.equal(removed.length, 1);
 
   const left = readEntries(dir);
@@ -86,7 +86,7 @@ test("删除 accepts several sessions in one call", () => {
   seed(dir, OTHER);
   seed(dir, "66666666-6666-4666-8666-666666666666");
 
-  const { removed } = removeEntries(dir, [SID, OTHER]);
+  const removed = removeEntries(dir, [SID, OTHER]);
   assert.equal(removed.length, 2);
   assert.equal(readEntries(dir).length, 1);
 });
@@ -96,7 +96,7 @@ test("删除 of an unknown session changes nothing", () => {
   seed(dir, SID);
   const before = JSON.stringify(readEntries(dir));
 
-  const { removed } = removeEntries(dir, ["99999999-9999-4999-8999-999999999999"]);
+  const removed = removeEntries(dir, ["99999999-9999-4999-8999-999999999999"]);
   assert.equal(removed.length, 0);
   assert.equal(JSON.stringify(readEntries(dir)), before);
 });
@@ -104,7 +104,7 @@ test("删除 of an unknown session changes nothing", () => {
 test("删除 matches the session id regardless of case", () => {
   const dir = tmpArchive();
   seed(dir, SID);
-  const { removed } = removeEntries(dir, [SID.toUpperCase()]);
+  const removed = removeEntries(dir, [SID.toUpperCase()]);
   assert.equal(removed.length, 1);
   assert.equal(readEntries(dir).length, 0);
 });

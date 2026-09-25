@@ -404,7 +404,7 @@ export function createServer({ bridge, config }) {
         if (!requested.length) {
           return json(res, 400, { error: { message: "sessionIds must be a non-empty array of UUIDs" } });
         }
-        const { removed } = removeEntries(config.archiveDir, requested);
+        const removed = removeEntries(config.archiveDir, requested);
         const gone = removed.map((e) => sessionIdFromUrl(e.Url)).filter(Boolean);
         // Derived state must not outlive the Session: a stale health row is
         // harmless, but a stale Binding would keep pointing callers at nothing.

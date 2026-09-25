@@ -134,16 +134,6 @@ export class CredentialStore {
   }
 
   /**
-   * One named account, with its cookie decrypted. null when the pool has no
-   * such account or it has been rejected — callers decide what that means.
-   */
-  byEmail(email) {
-    const account = this.#find(email);
-    if (!account || account.disabled) return null;
-    return { ...account, cookieHeader: decrypt(account.cookieHeader, this.key) };
-  }
-
-  /**
    * The account that must drive a Session: its recorded owner when the archive
    * knows one, otherwise whatever primary() would have picked.
    *
@@ -160,13 +150,14 @@ export class CredentialStore {
   forSession(ownerEmail = "") {
     const email = String(ownerEmail || "").trim();
     if (!email) return this.primary();
-    const account = this.byEmail(email);
-    if (account) return account;
-    const known = this.#find(email);
+    const account = this.#find(email);
+    if (account && !account.disabled) {
+      return { ...account, cookieHeader: decrypt(account.cookieHeader, this.key) };
+    }
     throw Object.assign(
       new Error(
         `Session owner ${email} is unavailable: ` +
-          (known
+          (account
             ? "the account is disabled — re-enable it with bin/accounts.mjs enable, or pick another Session."
             : "no such account in the pool — add it with bin/accounts.mjs add, or pick another Session.")
       ),

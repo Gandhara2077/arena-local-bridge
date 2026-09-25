@@ -63,45 +63,17 @@ export function sessionIdFromUrl(url) {
 }
 
 /**
- * Session id -> the Account email that created it, read from 记录.json.
+ * The Account email that created a Session, or "" when the archive does not say.
  *
- * Derived, never stored: the archive already carries Email per entry, so this
- * is only an index over data that exists. Keyed lower-case because session ids
- * are compared case-insensitively elsewhere.
- *
- * Cached by file mtime so a lookup on every request does not become a parse on
- * every request. The cache is keyed by directory too, so a config change cannot
- * serve a stale index from a different archive.
+ * Derived, never stored: the archive already carries Email per entry. 记录.json
+ * is small enough (kilobytes) that reading it per lookup is cheaper than keeping
+ * an index warm, so there is no cache here on purpose.
  */
-let accountIndexCache = { dir: "", mtimeMs: -1, index: new Map() };
-
-export function sessionAccountIndex(archiveDir) {
-  if (!archiveDir) return new Map();
-  let mtimeMs;
-  try {
-    mtimeMs = fs.statSync(path.join(archiveDir, "记录.json")).mtimeMs;
-  } catch {
-    accountIndexCache = { dir: archiveDir, mtimeMs: -1, index: new Map() };
-    return accountIndexCache.index;
-  }
-  if (accountIndexCache.dir === archiveDir && accountIndexCache.mtimeMs === mtimeMs) {
-    return accountIndexCache.index;
-  }
-  const index = new Map();
-  for (const entry of readEntries(archiveDir)) {
-    const sessionId = sessionIdFromUrl(entry.Url);
-    const email = String(entry.Email || "").trim();
-    if (sessionId && email) index.set(sessionId, email);
-  }
-  accountIndexCache = { dir: archiveDir, mtimeMs, index };
-  return index;
-}
-
-/** The Account email owning a Session, or "" when the archive does not say. */
 export function sessionAccountEmail(archiveDir, sessionId) {
   const id = String(sessionId || "").trim().toLowerCase();
   if (!id) return "";
-  return sessionAccountIndex(archiveDir).get(id) || "";
+  const entry = readEntries(archiveDir).find((e) => sessionIdFromUrl(e.Url) === id);
+  return entry ? String(entry.Email || "").trim() : "";
 }
 
 /**
@@ -186,7 +158,7 @@ export function removeEntries(archiveDir, sessionIds) {
       .filter(Boolean)
   );
   const entries = readEntries(archiveDir);
-  if (!wanted.size) return { removed: [], entries };
+  if (!wanted.size) return [];
 
   const kept = [];
   const removed = [];
@@ -195,7 +167,7 @@ export function removeEntries(archiveDir, sessionIds) {
     if (sessionId && wanted.has(sessionId)) removed.push(entry);
     else kept.push(entry);
   }
-  if (!removed.length) return { removed: [], entries };
+  if (!removed.length) return [];
 
   writeJsonAtomic(path.join(archiveDir, "记录.json"), kept);
   const folders = new Map();
@@ -204,7 +176,7 @@ export function removeEntries(archiveDir, sessionIds) {
   }
   for (const [folder, model] of folders) writeModelIndex(archiveDir, folder, model);
   writeSummary(archiveDir, kept);
-  return { removed, entries: kept };
+  return removed;
 }
 
 /** Per-model 清单.md — same shape the helper emits. */

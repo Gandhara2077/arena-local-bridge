@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CredentialStore } from "../src/credentials.mjs";
-import { sessionAccountEmail, sessionAccountIndex, sessionIdFromUrl } from "../src/archive.mjs";
+import { sessionAccountEmail, sessionIdFromUrl } from "../src/archive.mjs";
 
 // A Session is driven by the Account that created it. The archive is the only
 // place that records the link, so these tests cover the whole rule end to end:
@@ -27,13 +27,7 @@ function workspace() {
 }
 
 function writeArchive(archiveDir, entries) {
-  const file = path.join(archiveDir, "记录.json");
-  fs.writeFileSync(file, JSON.stringify(entries), "utf8");
-  // Force a distinct mtime so the mtime-keyed index cache cannot serve a stale
-  // index when a test rewrites the file within the same filesystem tick.
-  const t = new Date(Date.now() + Math.random() * 10_000);
-  fs.utimesSync(file, t, t);
-  return file;
+  fs.writeFileSync(path.join(archiveDir, "记录.json"), JSON.stringify(entries), "utf8");
 }
 
 function entry(sessionId, email) {
@@ -54,37 +48,14 @@ test("sessionIdFromUrl reads the uuid, and refuses anything else", () => {
   assert.equal(sessionIdFromUrl(undefined), "");
 });
 
-test("sessionAccountIndex maps session id to the email that created it", () => {
-  const { archiveDir } = workspace();
-  writeArchive(archiveDir, [entry(SID_A, OWNER), entry(SID_B, OTHER)]);
-  const index = sessionAccountIndex(archiveDir);
-  assert.equal(index.get(SID_A), OWNER);
-  assert.equal(index.get(SID_B), OTHER);
-});
-
-test("an entry with no Email contributes nothing to the index", () => {
-  const { archiveDir } = workspace();
-  writeArchive(archiveDir, [entry(SID_A, ""), entry(SID_B, OTHER)]);
-  const index = sessionAccountIndex(archiveDir);
-  assert.equal(index.has(SID_A), false);
-  assert.equal(index.get(SID_B), OTHER);
-});
-
 test("sessionAccountEmail answers only for sessions the archive knows", () => {
   const { archiveDir } = workspace();
-  writeArchive(archiveDir, [entry(SID_A, OWNER)]);
+  writeArchive(archiveDir, [entry(SID_A, OWNER), entry(SID_B, "")]);
   assert.equal(sessionAccountEmail(archiveDir, SID_A), OWNER);
+  // No Email recorded is no owner to report — not an empty-string owner.
   assert.equal(sessionAccountEmail(archiveDir, SID_B), "");
   assert.equal(sessionAccountEmail(archiveDir, ""), "");
   assert.equal(sessionAccountEmail(path.join(archiveDir, "nope"), SID_A), "");
-});
-
-test("the index picks up a rewritten 记录.json instead of serving the old one", () => {
-  const { archiveDir } = workspace();
-  writeArchive(archiveDir, [entry(SID_A, OWNER)]);
-  assert.equal(sessionAccountEmail(archiveDir, SID_A), OWNER);
-  writeArchive(archiveDir, [entry(SID_A, OTHER)]);
-  assert.equal(sessionAccountEmail(archiveDir, SID_A), OTHER);
 });
 
 test("the owning Account drives the Session, not the pool's top-ranked one", () => {
@@ -100,6 +71,8 @@ test("the owning Account drives the Session, not the pool's top-ranked one", () 
   const chosen = credentials.forSession(sessionAccountEmail(archiveDir, SID_A));
   assert.equal(chosen.email, OWNER);
   assert.equal(chosen.cookieHeader, "SESSION=x");
+  // Account lookup is case-insensitive, like every other lookup in the store.
+  assert.equal(credentials.forSession(OWNER.toUpperCase()).email, OWNER);
 });
 
 test("re-ordering the pool does not move a Session to another Account", () => {
