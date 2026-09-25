@@ -752,6 +752,7 @@ function sessionCard(s, active) {
       <div class="sc-head">
         <input type="checkbox" class="pick" data-sid="${escapeHtml(s.sessionId)}" ${SELECTED.has(s.sessionId) ? "checked" : ""} aria-label="选择" />
         <span class="name">${escapeHtml(s.model || s.title)}</span>
+        ${s.effort ? `<span class="badge dim" title="后端实际运行的推理档位">档位 ${escapeHtml(s.effort)}</span>` : ""}
         ${dead ? '<span class="badge dead">疑似失效</span>' : ""}
         ${isActive ? '<span class="pill">当前选用</span>' : ""}
       </div>
@@ -918,6 +919,7 @@ function renderPickList() {
     <label class="pickrow">
       <input type="checkbox" class="pick" data-sid="${escapeHtml(s.sessionId)}" ${SELECTED.has(s.sessionId) ? "checked" : ""} />
       <span class="nm">${escapeHtml(s.model || s.title)}</span>
+      ${s.effort ? `<span class="sub">档位 ${escapeHtml(s.effort)}</span>` : ""}
       <span class="sub">${escapeHtml(s.sessionId.slice(0, 13))}…</span>
     </label>`).join("");
   wire(box);

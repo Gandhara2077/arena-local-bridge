@@ -78,7 +78,7 @@ export function sessionAccountEmail(archiveDir, sessionId) {
 
 /**
  * Append one harvested session to 记录.json and refresh the markdown indexes.
- * entry: { sessionId, model, url, email, prompt, provider }
+ * entry: { sessionId, model, url, email, prompt, provider, effort }
  * Returns the stored record.
  */
 export function appendEntry(archiveDir, entry) {
@@ -103,6 +103,10 @@ export function appendEntry(archiveDir, entry) {
     ExportedFolder: null,
     Provider: entry.provider || null,
     Source: "arena-bridge",
+    // Reasoning tier observed for this Session ("high", "low", …), or null.
+    // Appended last on purpose: the field set above is the shape the external
+    // helper reads, so new fields go at the end rather than between them.
+    Effort: entry.effort || null,
   };
 
   const entries = readEntries(archiveDir);

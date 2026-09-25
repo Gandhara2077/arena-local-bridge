@@ -3,11 +3,11 @@
 //
 // This replaces the C# helper's collection loop for our flow:
 //   1. createAgentSession()  (already in bridge.mjs) -> new session + run token
-//   2. probeModel()          (src/probe.mjs)         -> real model name
+//   2. readModelFromPage()   (src/probe.mjs)         -> real model name + tier
 //   3. archive.appendEntry() (src/archive.mjs)       -> 记录.json + 清单/汇总
 // The resulting archive is byte-compatible with what the helper produces, so
 // the GUI, /v1/models and the converse-only driver all keep working unchanged.
-import { installProbe, readModelFromPage, probeModel } from "./probe.mjs";
+import { installProbe, readModelFromPage } from "./probe.mjs";
 import { appendEntry } from "./archive.mjs";
 import { log } from "./util.mjs";
 
@@ -94,8 +94,10 @@ export class Harvester {
     // each round, so a single page is enough and avoids re-auth churn.
     const page = await this.bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
 
-    // Reuse the Arena模型助手 probe verbatim: it hooks the page's own network
-    // traffic, so model attribution matches what the helper reports.
+    // The probe ships with this project (assets/arena-model-probe.inject.js).
+    // It hooks the page's own network traffic, so model attribution and the
+    // reasoning tier come from the same trace the page fetched — no run token,
+    // no extra request.
     const installed = await installProbe(page);
     if (!installed.ok) log.warn("harvest", "probe not installed", { error: installed.error });
     let consecutiveFailures = 0;
@@ -112,21 +114,18 @@ export class Harvester {
         this.state.current = { index: i, phase: "识别模型", sessionId: state.id };
 
         let model = null;
-        let provider = null;
+        let effort = null;
         try {
           if (installed.ok) {
             const hit = await readModelFromPage(page, { timeoutMs: 45_000 });
             model = hit.model || null;
+            // The tier comes from the probe's own trace summary — the backend
+            // runs, say, gpt-5.6-sol-low for a requested gpt-5.6-sol. It is
+            // reported only when the trace carried it, so it is often empty.
+            effort = hit.effort || null;
             round.via = hit.via;
             round.runId = hit.runId || null;
             if (!model) round.probeError = hit.error || "页面探针未识别出模型";
-          }
-          // Node-side fallback: same trigger.dev API, driven by the run token.
-          if (!model && state.token) {
-            const probe = await probeModel(state.token, { attempts: 5, intervalMs: 2_000 });
-            model = probe.model || null;
-            provider = probe.provider || null;
-            round.via = probe.via;
           }
         } catch (error) {
           // A missing model name is NOT a failed round: the session exists and
@@ -141,7 +140,7 @@ export class Harvester {
           url: `https://arena.ai/agent/${state.id}`,
           email: credential.email,
           prompt,
-          provider,
+          effort,
         });
 
         round.model = record.Model;

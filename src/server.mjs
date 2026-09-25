@@ -101,6 +101,7 @@ export function readArchiveSessions(archiveDir) {
         email: e.Email || "",
         collectedAt: e.CollectedAt || "",
         prompt: e.Prompt || "",
+        effort: e.Effort || "",
       };
     })
     .filter((s) => s.sessionId);
