@@ -419,6 +419,26 @@
             <div class="panel-title">
               <span class="ico" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                </svg>
+              </span>
+              <h2>账号额度</h2>
+            </div>
+            <button class="btn-ghost btn-sm" id="quotaRefresh">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-3.2-6.9" /><path d="M21 3v6h-6" />
+              </svg>
+              刷新额度
+            </button>
+          </div>
+          <div id="accounts"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <rect x="2" y="4" width="20" height="12" rx="2" /><path d="M8 20h8" /><path d="M12 16v4" />
                 </svg>
               </span>
@@ -686,6 +706,7 @@ async function render() {
   try {
     const [sessions, status] = await Promise.all([api("/api/sessions"), api("/api/status")]);
     BRIDGE_KEY = status.apiKey || BRIDGE_KEY;
+    renderAccounts(status); // fills ACCOUNT_QUOTA, which poolCard reads
     renderSessions(sessions, status);
     renderConn(status);
     await renderBindings();
@@ -781,6 +802,12 @@ function poolCard(g, active) {
     g.lastCollectedAt ? `<span class="badge dim">采集 ${escapeHtml(g.lastCollectedAt)}</span>` : "",
   ].join("");
   const accounts = (g.accounts || []).length ? escapeHtml(g.accounts.join("、")) : "—";
+  // Quota is per-account; a pool can span accounts, so show whichever of them
+  // already has a reading. Only the active account is ever refreshed.
+  const poolQuota = (g.accounts || [])
+    .map((e) => ACCOUNT_QUOTA.get(String(e).toLowerCase()))
+    .filter(Boolean);
+  const quota = poolQuota.length ? ` · ${poolQuota.map(quotaBits).join(" ")}` : "";
   return `
     <div class="pool caret-open" data-model="${escapeHtml(g.model)}">
       <div class="pool-head">
@@ -790,7 +817,7 @@ function poolCard(g, active) {
         <span class="pool-metrics">${badges}</span>
       </div>
       <div class="pool-body">
-        <div class="pool-meta">账号：${accounts} · ${g.total} 条 session</div>
+        <div class="pool-meta">账号：${accounts} · ${g.total} 条 session${quota}</div>
         <div class="pool-sub">${(g.sessions || []).map((s) => sessionCard(s, active)).join("")}</div>
       </div>
     </div>`;
@@ -973,6 +1000,73 @@ async function unbindBinding(clientId) {
     toast(r && r.ok ? "已解除绑定" : "解除失败：" + ((r && r.error && r.error.message) || "未知错误"), !(r && r.ok));
   } catch (e) {
     toast("解除失败：" + e.message, true);
+  }
+  await render();
+}
+
+// ── 账号额度 ───────────────────────────────────────────────────────────────
+// Quota is read on demand and only for the ACTIVE account: switching credential
+// tears the shared browser context down, so a read must never touch another one.
+// Every value here is a cached observation — shown with the time it was taken,
+// never presented as live.
+let ACCOUNT_QUOTA = new Map();
+
+function quotaBits(q) {
+  if (!q) return "";
+  const bits = [];
+  if (q.percent !== null && q.percent !== undefined) {
+    bits.push(`<span class="badge">额度 ${escapeHtml(String(q.percent))}%</span>`);
+  }
+  const left = Number(q.usd?.balanceRemainingUsd);
+  const total = Number(q.usd?.allowanceUsd);
+  if (Number.isFinite(left) && Number.isFinite(total)) {
+    bits.push(`<span class="badge dim" title="已结算窗口的余额">$${left.toFixed(2)} / $${total.toFixed(2)}</span>`);
+  }
+  if (bits.length === 0) bits.push('<span class="badge dim">额度未读到</span>');
+  if (q.checkedAt) bits.push(`<span class="sub">读取于 ${escapeHtml(shortTime(q.checkedAt))}</span>`);
+  return bits.join(" ");
+}
+
+function renderAccounts(status) {
+  const list = (status && status.accounts) || [];
+  ACCOUNT_QUOTA = new Map(list.filter((a) => a.quota).map((a) => [String(a.email).toLowerCase(), a.quota]));
+  const box = $("#accounts");
+  if (!box) return;
+  if (!list.length) {
+    box.innerHTML = emptyState(ICON.inbox, "没有账号", "先运行 <code>node bin/login.mjs</code> 添加一个 Arena 账号。");
+    return;
+  }
+  box.innerHTML = list
+    .map((a) => {
+      const expiry =
+        a.cookieExpirySeconds === null || a.cookieExpirySeconds === undefined ? "?" : `${a.cookieExpirySeconds}s`;
+      return `
+      <div class="bidrow">
+        <div class="bidid">${escapeHtml(a.email)}</div>
+        <div class="bidmeta">
+          ${a.disabled ? '<span class="badge dead">已禁用</span>' : '<span class="badge">可用</span>'}
+          <span class="badge dim">priority ${escapeHtml(String(a.priority))}</span>
+          <span class="badge dim">cookie ${escapeHtml(expiry)}</span>
+          ${quotaBits(a.quota)}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+async function refreshQuota(btn) {
+  const html = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = "读取中…";
+  try {
+    const r = await keyPost("/api/account/quota");
+    if (r && r.error) toast("读取失败：" + r.error.message, true);
+    else toast(r.percent === null || r.percent === undefined ? "百分比未读到（USD 见下）" : `额度 ${r.percent}%`);
+  } catch (e) {
+    toast("读取失败：" + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = html;
   }
   await render();
 }
@@ -1183,6 +1277,7 @@ $("#tsStart").addEventListener("click", tsStart);
 $("#tsStop").addEventListener("click", tsStop);
 $("#selAll").addEventListener("click", () => selectAll(true));
 $("#selNone").addEventListener("click", () => selectAll(false));
+$("#quotaRefresh").addEventListener("click", () => refreshQuota($("#quotaRefresh")));
 $("#selDel").addEventListener("click", () => deleteSessions([...SELECTED]));
 $("#selAll2").addEventListener("click", () => selectAll(true));
 $("#selNone2").addEventListener("click", () => selectAll(false));

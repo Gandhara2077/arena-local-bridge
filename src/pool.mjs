@@ -19,7 +19,18 @@ const DEAD = "suspected-dead";
 
 /** The empty pool state. Sessions default to `ok`; only real failures move them. */
 export function emptyState() {
-  return { version: STATE_VERSION, sessions: {}, bindings: {} };
+  return { version: STATE_VERSION, sessions: {}, bindings: {}, accounts: {} };
+}
+
+/**
+ * Remember the last quota reading for an Account. Derived and disposable, like
+ * everything else in this sidecar: it is a cached observation, not a fact, so
+ * callers must show when it was taken rather than presenting it as live.
+ */
+export function setAccountQuota(state, email, quota) {
+  const key = String(email || "").trim().toLowerCase();
+  if (!key) return state;
+  return { ...state, accounts: { ...(state.accounts || {}), [key]: quota } };
 }
 
 /**

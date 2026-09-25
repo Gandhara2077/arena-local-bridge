@@ -1415,6 +1415,70 @@ export class Bridge {
     return work;
   }
 
+  /**
+   * Read the account's remaining quota from Arena, using the page we already
+   * drive. Two independent readings, because they come from different places:
+   *
+   *   percent — a plain same-origin GET. Always available.
+   *   usd     — the probe's snapshot of the trace's cost spans. Only present
+   *             once a run on this page has settled, so it is often absent.
+   *
+   * Never touches another account: switching credential tears the shared
+   * browser context down, which would kill whatever turn is in flight.
+   */
+  async quotaSnapshot() {
+    const account = this.#credential();
+    const page = await this.browser.getPage(account.cookieHeader, account.updatedAt);
+    const read = async () => {
+      // A freshly created context sits on about:blank, where the relative
+      // endpoints below would not resolve. Land on the origin first.
+      const onArena = await page.evaluate(() => location.origin === "https://arena.ai").catch(() => false);
+      if (!onArena) {
+        await page.goto("https://arena.ai/agent", { waitUntil: "domcontentloaded", timeout: 60_000 });
+      }
+      return page.evaluate(async () => {
+        const out = { percent: null, percentSource: null, usd: null, usdStatus: null, error: null };
+        const getJson = async (path) => {
+          const r = await fetch(path, { headers: { Accept: "application/json" } });
+          return r.ok ? r.json() : null;
+        };
+        try {
+          const d = await getJson("/api/me/pulse");
+          if (Number.isInteger(d?.pulse) && d.pulse >= 0 && d.pulse <= 100) {
+            out.percent = d.pulse;
+            out.percentSource = "pulse";
+          }
+        } catch (e) {
+          out.error = String(e?.message || e);
+        }
+        // The credits endpoint is a fallback reading, not a USD conversion.
+        // A 403 there is transient, so it must not disable anything.
+        if (out.percent === null) {
+          try {
+            const d = await getJson("/api/billing/balance");
+            if (Number.isSafeInteger(d?.creditsRemaining) && Number.isSafeInteger(d?.dailyFreeCredits) && d.dailyFreeCredits > 0) {
+              out.percent = Math.round((d.creditsRemaining / d.dailyFreeCredits) * 100);
+              out.percentSource = "billing";
+            }
+          } catch (e) {
+            out.error = out.error || String(e?.message || e);
+          }
+        }
+        try {
+          const api = window.__MODEL_PROBE__;
+          const snap = api?.usdQuotaSnapshot ? api.usdQuotaSnapshot() : null;
+          out.usdStatus = snap?.status || "probe-unavailable";
+          out.usd = snap?.quota || null;
+        } catch {
+          out.usdStatus = "error";
+        }
+        return out;
+      });
+    };
+    const result = await read();
+    return { email: account.email, ...result, checkedAt: new Date().toISOString() };
+  }
+
   healthPayload() {
     const credential = this.credentials.primary();
     const averageLatencyMs = this.runtime.completed

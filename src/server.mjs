@@ -29,6 +29,7 @@ import {
   markOk,
   markUsed,
   resolveBinding,
+  setAccountQuota,
   unbind,
 } from "./pool.mjs";
 
@@ -221,6 +222,18 @@ export function createServer({ bridge, config }) {
   let turnsInFlight = 0;
 
   /**
+   * Accounts with their last quota reading attached. The reading is a cached
+   * observation, so it travels with its own checkedAt — callers must show when
+   * it was taken rather than presenting it as live.
+   */
+  function accountsWithQuota() {
+    return (bridge.credentials.list() || []).map((a) => ({
+      ...a,
+      quota: poolState.accounts?.[String(a.email || "").toLowerCase()] || null,
+    }));
+  }
+
+  /**
    * Shared entry guard for the two ModelPool actions that drive one real turn.
    * Returns the validated session id, or null when a response was already sent.
    */
@@ -270,7 +283,11 @@ export function createServer({ bridge, config }) {
 
     // /health stays open: it is the readiness probe used by install.sh and
     // run.sh, and it exposes no credentials.
-    if (url.pathname === "/health" || url.pathname === "/ready") return json(res, 200, bridge.healthPayload());
+    if (url.pathname === "/health" || url.pathname === "/ready") {
+      const payload = bridge.healthPayload();
+      payload.accounts = accountsWithQuota();
+      return json(res, 200, payload);
+    }
 
     // ── GUI (local, unauthenticated) ───────────────────────────────────────
     // The web GUI is the entry point for picking an archived Arena session and
@@ -324,6 +341,7 @@ export function createServer({ bridge, config }) {
         apiKey: config.bridgeKey,
         activeSession,
         model: activeSession,
+        accounts: accountsWithQuota(),
       });
     }
 
@@ -446,6 +464,27 @@ export function createServer({ bridge, config }) {
         savePoolState(config, poolState);
         log.info("server", "pool delete", { requested: requested.length, removed: gone.length });
         return json(res, 200, { ok: true, requested: requested.length, removed: gone, notFound: requested.length - gone.length });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    }
+
+    // 额度 — read the active account's remaining quota on demand. Manual only,
+    // and never another account: switching credential tears the shared browser
+    // context down, which would kill whatever turn is in flight.
+    if (req.method === "POST" && url.pathname === "/api/account/quota") {
+      try {
+        if (turnsInFlight > 0) return json(res, 409, busyError());
+        const snap = await bridge.quotaSnapshot();
+        poolState = setAccountQuota(poolState, snap.email, snap);
+        savePoolState(config, poolState);
+        log.info("server", "account quota", {
+          account: snap.email,
+          percent: snap.percent,
+          percentSource: snap.percentSource,
+          usdStatus: snap.usdStatus,
+        });
+        return json(res, 200, snap);
       } catch (error) {
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
       }
