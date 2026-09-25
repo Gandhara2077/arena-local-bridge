@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./util.mjs";
 import { AgentDockManager } from "./agentdock.mjs";
-import { stats as archiveStats, readEntries, sessionAccountEmail, sessionIdFromUrl, updateModel } from "./archive.mjs";
+import { stats as archiveStats, readEntries, removeEntries, sessionAccountEmail, sessionIdFromUrl, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
 import { installProbe, readModelFromPage } from "./probe.mjs";
@@ -23,6 +23,7 @@ import {
   bind,
   clientSessionId,
   emptyState,
+  forgetSession,
   groupSessions,
   markDead,
   markOk,
@@ -385,6 +386,33 @@ export function createServer({ bridge, config }) {
         const updated = updateModel(config.archiveDir, sid, found.model);
         log.info("server", "pool reprobe", { sessionId: sid, model: found.model, updated: Boolean(updated) });
         return json(res, 200, { ok: true, sessionId: sid, model: found.model, updated: Boolean(updated) });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    }
+
+    // 删除 — drop Sessions from the archive for good. This is the one
+    // irreversible operator action here, so it is keyed and explicit: the GUI
+    // confirms first, and the response says exactly what went. Only the local
+    // archive is touched; the Session on Arena's side is not ours to remove.
+    if (req.method === "POST" && url.pathname === "/api/pool/delete") {
+      try {
+        const body = await readBody(req);
+        const requested = (Array.isArray(body.sessionIds) ? body.sessionIds : [body.sessionId])
+          .map((s) => String(s || "").trim())
+          .filter(isSessionId);
+        if (!requested.length) {
+          return json(res, 400, { error: { message: "sessionIds must be a non-empty array of UUIDs" } });
+        }
+        const { removed } = removeEntries(config.archiveDir, requested);
+        const gone = removed.map((e) => sessionIdFromUrl(e.Url)).filter(Boolean);
+        // Derived state must not outlive the Session: a stale health row is
+        // harmless, but a stale Binding would keep pointing callers at nothing.
+        for (const sid of gone) poolState = forgetSession(poolState, sid);
+        if (gone.some((sid) => sid.toLowerCase() === activeSession.toLowerCase())) activeSession = "";
+        savePoolState(config, poolState);
+        log.info("server", "pool delete", { requested: requested.length, removed: gone.length });
+        return json(res, 200, { ok: true, requested: requested.length, removed: gone, notFound: requested.length - gone.length });
       } catch (error) {
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
       }

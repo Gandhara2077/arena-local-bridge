@@ -73,6 +73,29 @@ export function unbind(state, clientId) {
 }
 
 /**
+ * Forget a Session entirely: its health entry, and every Binding pointing at it.
+ * A binding left behind would keep resolving to a Session that no longer exists,
+ * which is worse than no binding — the caller would get 404s from Arena instead
+ * of the clean "nothing picked" answer.
+ *
+ * Matching is case-insensitive because ids reach us from both the archive
+ * (normalised to lower case) and client headers (whatever the caller typed).
+ */
+export function forgetSession(state, sessionId) {
+  const id = String(sessionId || "").trim().toLowerCase();
+  if (!id) return state;
+  const sessions = {};
+  for (const [key, value] of Object.entries(state.sessions || {})) {
+    if (key.toLowerCase() !== id) sessions[key] = value;
+  }
+  const bindings = {};
+  for (const [clientId, binding] of Object.entries(state.bindings || {})) {
+    if (String(binding?.sessionId || "").toLowerCase() !== id) bindings[clientId] = binding;
+  }
+  return { ...state, sessions, bindings };
+}
+
+/**
  * Resolve a client's Binding. Never substitutes another Session: a dead binding
  * is reported so the caller can choose, because switching would drop context.
  */

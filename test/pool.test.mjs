@@ -10,6 +10,7 @@ import {
   markUsed,
   bind,
   unbind,
+  forgetSession,
   resolveBinding,
 } from "../src/pool.mjs";
 
@@ -134,6 +135,39 @@ test("unbind drops the binding", () => {
   let state = bind(emptyState(), "client-1", SESSION_A.sessionId, "2026-09-23T00:00:00.000Z");
   state = unbind(state, "client-1");
   assert.deepEqual(resolveBinding(state, "client-1"), { ok: false, code: "no_binding" });
+});
+
+// 删除 a Session must not leave derived state behind. A stale health row is
+// harmless, but a stale Binding would keep pointing callers at a Session that
+// no longer exists — worse than no binding, because the failure moves to Arena.
+test("forgetSession drops the health entry and keeps the others", () => {
+  let state = markDead(emptyState(), SESSION_A.sessionId, "2026-09-23T00:00:00.000Z");
+  state = markUsed(state, SESSION_B.sessionId, "2026-09-23T00:00:00.000Z");
+
+  state = forgetSession(state, SESSION_A.sessionId);
+
+  assert.equal(state.sessions[SESSION_A.sessionId], undefined);
+  assert.ok(state.sessions[SESSION_B.sessionId]);
+});
+
+test("forgetSession drops every binding that pointed at the session", () => {
+  let state = bind(emptyState(), "client-1", SESSION_A.sessionId, null);
+  state = bind(state, "client-2", SESSION_B.sessionId, null);
+
+  state = forgetSession(state, SESSION_A.sessionId);
+
+  assert.equal(state.bindings["client-1"], undefined);
+  assert.ok(state.bindings["client-2"]);
+  assert.deepEqual(resolveBinding(state, "client-1"), { ok: false, code: "no_binding" });
+});
+
+test("forgetSession matches the id regardless of case, and ignores empty input", () => {
+  let state = bind(emptyState(), "client-1", SESSION_A.sessionId, null);
+  state = forgetSession(state, SESSION_A.sessionId.toUpperCase());
+  assert.equal(state.bindings["client-1"], undefined);
+
+  const untouched = emptyState();
+  assert.equal(forgetSession(untouched, ""), untouched);
 });
 
 test("clientSessionId prefers the standard session header", () => {

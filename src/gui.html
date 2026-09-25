@@ -379,6 +379,7 @@
           <button class="btn-ghost btn-sm" id="selAll">全选</button>
           <button class="btn-ghost btn-sm" id="selNone">清空</button>
           <span class="muted" id="selCount">已选 0 个</span>
+          <button class="btn-ghost btn-sm" id="selDel">删除所选</button>
         </div>
         <div class="poolbar">
           <input type="search" id="poolSearch" placeholder="搜索模型 / UUID / 账号" aria-label="搜索模型池" />
@@ -623,6 +624,9 @@ function wire(root) {
   root.querySelectorAll(".verify-btn").forEach((b) => {
     b.addEventListener("click", () => verifySession(b));
   });
+  root.querySelectorAll(".del-btn").forEach((b) => {
+    b.addEventListener("click", () => deleteSessions([b.dataset.sid]));
+  });
   root.querySelectorAll(".reprobe-btn").forEach((b) => {
     b.addEventListener("click", () => reprobeSession(b));
   });
@@ -759,6 +763,7 @@ function sessionCard(s, active) {
         </button>
         <button class="btn-ghost btn-sm verify-btn" data-sid="${escapeHtml(s.sessionId)}">体检</button>
         ${unresolved ? `<button class="btn-ghost btn-sm reprobe-btn" data-sid="${escapeHtml(s.sessionId)}">补标</button>` : ""}
+        <button class="btn-ghost btn-sm del-btn" data-sid="${escapeHtml(s.sessionId)}">删除</button>
       </div>
       <div class="sc-url">Arena URL（仅供参考，<b>勿在你自己浏览器打开</b>）：<br>${escapeHtml(s.url)}</div>
     </article>`;
@@ -875,6 +880,31 @@ async function reprobeSession(btn) {
     btn.innerHTML = html;
     await render();
   }
+}
+
+// 删除 is the only irreversible action in this GUI, and 记录.json is the only
+// record these Sessions have — so it always confirms first, and the wording
+// says plainly that Arena's side is untouched (we cannot remove that).
+async function deleteSessions(ids) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) { toast("先勾选要删除的 session", true); return; }
+  const ok = window.confirm(
+    `确认删除 ${list.length} 条 session？\n\n` +
+      "· 会从本地归档 记录.json 里永久移除，无法撤销\n" +
+      "· 它们在 Arena 侧仍然存在，只是这里不再记录\n" +
+      "· 指向它们的绑定会一并解除"
+  );
+  if (!ok) return;
+  try {
+    const r = await keyPost("/api/pool/delete", { sessionIds: list });
+    if (r && r.error) { toast("删除失败：" + r.error.message, true); return; }
+    const n = (r && r.removed && r.removed.length) || 0;
+    for (const id of list) SELECTED.delete(id);
+    toast(`已删除 ${n} 条` + (r && r.notFound ? `（${r.notFound} 条未找到）` : ""));
+  } catch (e) {
+    toast("删除失败：" + e.message, true);
+  }
+  await render();
 }
 
 function renderPickList() {
@@ -1151,6 +1181,7 @@ $("#tsStart").addEventListener("click", tsStart);
 $("#tsStop").addEventListener("click", tsStop);
 $("#selAll").addEventListener("click", () => selectAll(true));
 $("#selNone").addEventListener("click", () => selectAll(false));
+$("#selDel").addEventListener("click", () => deleteSessions([...SELECTED]));
 $("#selAll2").addEventListener("click", () => selectAll(true));
 $("#selNone2").addEventListener("click", () => selectAll(false));
 render();

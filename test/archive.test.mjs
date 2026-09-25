@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readEntries, appendEntry, updateModel } from "../src/archive.mjs";
+import { readEntries, appendEntry, removeEntries, updateModel } from "../src/archive.mjs";
 
 // 补标 rewrites 记录.json — the source of truth. CONTRIBUTING asks for
 // regression tests on session-handling changes, so it gets its own file even
@@ -40,4 +40,71 @@ test("补标 keeps the original collection time in the title", () => {
 test("补标 returns null when no archived entry carries that session", () => {
   const dir = tmpArchive();
   assert.equal(updateModel(dir, "99999999-9999-4999-8999-999999999999", "kimi-k3"), null);
+});
+
+// 删除 is the one irreversible archive operation — 记录.json is the only record
+// these Sessions have, so what it leaves behind matters as much as what it takes.
+const OTHER = "55555555-5555-4555-8555-555555555555";
+
+function seed(dir, sessionId, model = "kimi-k3") {
+  appendEntry(dir, {
+    sessionId,
+    model,
+    url: `https://arena.ai/agent/${sessionId}`,
+    email: "a@example.com",
+    prompt: "hi",
+  });
+}
+
+test("删除 removes the named session and leaves the others alone", () => {
+  const dir = tmpArchive();
+  seed(dir, SID);
+  seed(dir, OTHER, "gpt-5");
+
+  const { removed } = removeEntries(dir, [SID]);
+  assert.equal(removed.length, 1);
+
+  const left = readEntries(dir);
+  assert.equal(left.length, 1);
+  assert.ok(String(left[0].Url).includes(OTHER));
+});
+
+test("删除 refreshes the emptied model's 清单.md and the root 汇总.md", () => {
+  const dir = tmpArchive();
+  seed(dir, SID);
+  const folder = readEntries(dir)[0].ModelFolder;
+
+  removeEntries(dir, [SID]);
+
+  assert.match(fs.readFileSync(path.join(dir, folder, "清单.md"), "utf8"), /共 0 条会话/);
+  assert.match(fs.readFileSync(path.join(dir, "汇总.md"), "utf8"), /共 0 条会话/);
+});
+
+test("删除 accepts several sessions in one call", () => {
+  const dir = tmpArchive();
+  seed(dir, SID);
+  seed(dir, OTHER);
+  seed(dir, "66666666-6666-4666-8666-666666666666");
+
+  const { removed } = removeEntries(dir, [SID, OTHER]);
+  assert.equal(removed.length, 2);
+  assert.equal(readEntries(dir).length, 1);
+});
+
+test("删除 of an unknown session changes nothing", () => {
+  const dir = tmpArchive();
+  seed(dir, SID);
+  const before = JSON.stringify(readEntries(dir));
+
+  const { removed } = removeEntries(dir, ["99999999-9999-4999-8999-999999999999"]);
+  assert.equal(removed.length, 0);
+  assert.equal(JSON.stringify(readEntries(dir)), before);
+});
+
+test("删除 matches the session id regardless of case", () => {
+  const dir = tmpArchive();
+  seed(dir, SID);
+  const { removed } = removeEntries(dir, [SID.toUpperCase()]);
+  assert.equal(removed.length, 1);
+  assert.equal(readEntries(dir).length, 0);
 });

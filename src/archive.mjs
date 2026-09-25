@@ -167,6 +167,46 @@ export function updateModel(archiveDir, sessionId, model) {
   return entries[idx];
 }
 
+/**
+ * Remove Sessions from 记录.json, then refresh the per-model 清单.md files that
+ * lost a row and the root 汇总.md.
+ *
+ * This is the only irreversible operation in the archive, and 记录.json is the
+ * only record of these Sessions — Arena's copy is not ours to touch. The caller
+ * is responsible for confirming with the operator; nothing here is undoable.
+ *
+ * Model folders are left in place even when they empty out: the directory
+ * layout is an interchange contract with the external helper, so a folder that
+ * reads "共 0 条会话" is safer than one that vanished.
+ */
+export function removeEntries(archiveDir, sessionIds) {
+  const wanted = new Set(
+    (Array.isArray(sessionIds) ? sessionIds : [sessionIds])
+      .map((s) => String(s || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const entries = readEntries(archiveDir);
+  if (!wanted.size) return { removed: [], entries };
+
+  const kept = [];
+  const removed = [];
+  for (const entry of entries) {
+    const sessionId = sessionIdFromUrl(entry.Url);
+    if (sessionId && wanted.has(sessionId)) removed.push(entry);
+    else kept.push(entry);
+  }
+  if (!removed.length) return { removed: [], entries };
+
+  writeJsonAtomic(path.join(archiveDir, "记录.json"), kept);
+  const folders = new Map();
+  for (const entry of removed) {
+    if (entry.ModelFolder) folders.set(entry.ModelFolder, entry.Model);
+  }
+  for (const [folder, model] of folders) writeModelIndex(archiveDir, folder, model);
+  writeSummary(archiveDir, kept);
+  return { removed, entries: kept };
+}
+
 /** Per-model 清单.md — same shape the helper emits. */
 function writeModelIndex(archiveDir, folder, model) {
   const dir = path.join(archiveDir, folder);
