@@ -56,6 +56,54 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
+/** The Arena session id inside an entry's Url (…/agent/<uuid>), or "". */
+export function sessionIdFromUrl(url) {
+  const m = String(url || "").match(/\/agent\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+/**
+ * Session id -> the Account email that created it, read from 记录.json.
+ *
+ * Derived, never stored: the archive already carries Email per entry, so this
+ * is only an index over data that exists. Keyed lower-case because session ids
+ * are compared case-insensitively elsewhere.
+ *
+ * Cached by file mtime so a lookup on every request does not become a parse on
+ * every request. The cache is keyed by directory too, so a config change cannot
+ * serve a stale index from a different archive.
+ */
+let accountIndexCache = { dir: "", mtimeMs: -1, index: new Map() };
+
+export function sessionAccountIndex(archiveDir) {
+  if (!archiveDir) return new Map();
+  let mtimeMs;
+  try {
+    mtimeMs = fs.statSync(path.join(archiveDir, "记录.json")).mtimeMs;
+  } catch {
+    accountIndexCache = { dir: archiveDir, mtimeMs: -1, index: new Map() };
+    return accountIndexCache.index;
+  }
+  if (accountIndexCache.dir === archiveDir && accountIndexCache.mtimeMs === mtimeMs) {
+    return accountIndexCache.index;
+  }
+  const index = new Map();
+  for (const entry of readEntries(archiveDir)) {
+    const sessionId = sessionIdFromUrl(entry.Url);
+    const email = String(entry.Email || "").trim();
+    if (sessionId && email) index.set(sessionId, email);
+  }
+  accountIndexCache = { dir: archiveDir, mtimeMs, index };
+  return index;
+}
+
+/** The Account email owning a Session, or "" when the archive does not say. */
+export function sessionAccountEmail(archiveDir, sessionId) {
+  const id = String(sessionId || "").trim().toLowerCase();
+  if (!id) return "";
+  return sessionAccountIndex(archiveDir).get(id) || "";
+}
+
 /**
  * Append one harvested session to 记录.json and refresh the markdown indexes.
  * entry: { sessionId, model, url, email, prompt, provider }

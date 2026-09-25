@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./util.mjs";
 import { AgentDockManager } from "./agentdock.mjs";
-import { stats as archiveStats, readEntries, updateModel } from "./archive.mjs";
+import { stats as archiveStats, readEntries, sessionAccountEmail, sessionIdFromUrl, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
 import { installProbe, readModelFromPage } from "./probe.mjs";
@@ -92,11 +92,8 @@ export function readArchiveSessions(archiveDir) {
   // archive.mjs owns the one rule for reading 记录.json; this only reshapes it.
   return readEntries(archiveDir)
     .map((e) => {
-      const m = String(e.Url || "").match(
-        /\/agent\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
-      );
       return {
-        sessionId: m ? m[1] : "",
+        sessionId: sessionIdFromUrl(e.Url),
         model: e.Model || "",
         title: e.Title || "",
         url: e.Url || "",
@@ -348,7 +345,13 @@ export function createServer({ bridge, config }) {
         let failure = null;
         turnsInFlight += 1;
         try {
-          const payload = await bridge.converse(sid, { messages: [{ role: "user", content: probe }] }, { injectMcp: false });
+          const payload = await bridge.converse(
+            sid,
+            { messages: [{ role: "user", content: probe }] },
+            // 体检 drives the Session too, so it must use the owning Account —
+            // otherwise it would report on a session it cannot actually open.
+            { injectMcp: false, accountEmail: sessionAccountEmail(config.archiveDir, sid) }
+          );
           alive = Array.isArray(payload?.choices) && payload.choices.length > 0;
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
@@ -582,6 +585,13 @@ export function createServer({ bridge, config }) {
           target = activeSession;
         }
       }
+      // Resolve the owning Account BEFORE any response is opened. Streaming
+      // clients get their 200 + SSE headers up front (§4.13.9), so anything
+      // thrown later is delivered mid-stream and reads as "connection dropped"
+      // instead of as the 409 it actually is. Resolving here keeps it clean.
+      const accountEmail = target ? sessionAccountEmail(config.archiveDir, target) : "";
+      let account = null;
+      if (target) account = bridge.credentials.forSession(accountEmail);
       // Streaming clients get the SSE response opened IMMEDIATELY — before we
       // drive the (slow) Arena round-trip — plus a keep-alive heartbeat. Without
       // this the client sees zero bytes for 17-180s and aborts with a timeout
@@ -651,7 +661,9 @@ export function createServer({ bridge, config }) {
       } else if (target) {
         turnsInFlight += 1;
         try {
-          payload = await bridge.converse(target, body, { onDelta, headers: req.headers });
+          // The owning Account was resolved before the stream opened, so a
+          // disabled owner has already become a clean 409 by now.
+          payload = await bridge.converse(target, body, { onDelta, headers: req.headers, account, accountEmail });
           poolState = markUsed(poolState, target, new Date().toISOString());
         } catch (error) {
           // A real failure is the only trusted dead signal — never a timeout,

@@ -7,6 +7,7 @@ import path from "node:path";
 import { loadDotEnv, loadConfig } from "../src/config.mjs";
 import { CredentialStore } from "../src/credentials.mjs";
 import { ArenaBrowser } from "../src/arena-login.mjs";
+import { sessionAccountEmail } from "../src/archive.mjs";
 import { requireSecret } from "../src/secret.mjs";
 
 const targetId = process.argv[2];
@@ -20,7 +21,17 @@ const dotEnv = loadDotEnv(path.join(dataDir, ".env"));
 const config = loadConfig({ ...dotEnv, ...process.env }, { requireBridgeKey: false });
 const secret = requireSecret(dotEnv);
 const credentials = new CredentialStore({ filePath: config.credentialsFile, secret, omniDbPath: config.omniDbPath }).load();
-const credential = credentials.primary();
+
+// Drive the Session with the Account that created it — see credentials.forSession.
+// Diagnosing "editor not found" under the wrong account would send us chasing a
+// page state that was never the one being asked about.
+let credential;
+try {
+  credential = credentials.forSession(sessionAccountEmail(config.archiveDir, targetId));
+} catch (error) {
+  console.log(JSON.stringify({ event: "error", targetId, message: error.message, code: error.code || null }));
+  process.exit(1);
+}
 
 const browser = new ArenaBrowser({
   omniRoot: config.omniRoot,

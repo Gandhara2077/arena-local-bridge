@@ -13,6 +13,7 @@ import { ArenaBrowser } from "../src/arena-login.mjs";
 import { Bridge } from "../src/bridge.mjs";
 import { parseAgentOutput } from "../src/parser.mjs";
 import { secondsToExpiry } from "../src/cookie.mjs";
+import { sessionAccountEmail } from "../src/archive.mjs";
 import { requireSecret } from "../src/secret.mjs";
 
 const targetId = process.argv[2];
@@ -28,7 +29,17 @@ const dotEnv = loadDotEnv(path.join(dataDir, ".env"));
 const config = loadConfig({ ...dotEnv, ...process.env }, { requireBridgeKey: false });
 const secret = requireSecret(dotEnv);
 const credentials = new CredentialStore({ filePath: config.credentialsFile, secret, omniDbPath: config.omniDbPath }).load();
-const credential = credentials.primary();
+
+// Drive the Session with the Account that created it — see credentials.forSession.
+// A known-but-unusable owner is a hard stop: there is no correct account to use,
+// and reporting health from the wrong one would be worse than not reporting.
+let credential;
+try {
+  credential = credentials.forSession(sessionAccountEmail(config.archiveDir, targetId));
+} catch (error) {
+  console.log(JSON.stringify({ sessionId: targetId, error: { message: error.message, code: error.code || null } }, null, 1));
+  process.exit(1);
+}
 
 const out = { sessionId: targetId, account: credential.email, checkedAt: new Date().toISOString() };
 

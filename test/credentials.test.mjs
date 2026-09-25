@@ -95,3 +95,24 @@ test("the pool survives a reload, including disabled state", () => {
   assert.equal(reopened.primary().email, "b@example.com");
   assert.equal(reopened.list().find((r) => r.email === "a@example.com").disabled, true);
 });
+
+test("byEmail returns one named account, cookie decrypted", () => {
+  const s = store();
+  s.upsert({ email: "a@example.com", cookieHeader: "SESSION=aaa", password: "p", priority: 1 });
+  s.upsert({ email: "b@example.com", cookieHeader: "SESSION=bbb", password: "p", priority: 2 });
+
+  // Lookup is case-insensitive, like every other account lookup here.
+  assert.equal(s.byEmail("b@EXAMPLE.com").email, "b@example.com");
+  assert.equal(s.byEmail("b@example.com").cookieHeader, "SESSION=bbb");
+});
+
+test("byEmail answers null for an unknown or disabled account", () => {
+  const s = store();
+  s.upsert({ email: "a@example.com", cookieHeader: "a=1", password: "p", priority: 1 });
+
+  assert.equal(s.byEmail("nobody@example.com"), null);
+  assert.equal(s.byEmail(""), null);
+
+  s.disable("a@example.com", "restricted");
+  assert.equal(s.byEmail("a@example.com"), null);
+});

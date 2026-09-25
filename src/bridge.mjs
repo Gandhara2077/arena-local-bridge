@@ -166,8 +166,13 @@ export class Bridge {
     });
   }
 
-  #credential() {
-    return this.credentials.primary();
+  /**
+   * The Account that must drive a turn. An explicit owner is honoured and never
+   * substituted — see CredentialStore.forSession for why. No owner means the
+   * caller has no information, so the pool's default pick applies.
+   */
+  #credential(accountEmail = "") {
+    return this.credentials.forSession(accountEmail);
   }
 
   /**
@@ -216,8 +221,13 @@ export class Bridge {
     if (next) sink(next);
   }
 
-  async #page() {
-    const credential = this.#credential();
+  /**
+   * The browser page for a turn, driven by `account` when the caller resolved
+   * one (converse does, from the Session's owner); otherwise by the pool's
+   * default pick, which is what the session-creating flows want.
+   */
+  async #page(account = null) {
+    const credential = account || this.#credential();
     return this.browser.getPage(credential.cookieHeader, credential.updatedAt);
   }
 
@@ -1076,6 +1086,16 @@ export class Bridge {
     if (!prompt || !prompt.trim()) {
       throw Object.assign(new Error("No user message to send"), { status: 400, code: "empty_prompt" });
     }
+    // The owning Account is normally resolved by the caller BEFORE it opens a
+    // response — a known-but-unusable owner must surface as a clean 409, not as
+    // a mid-stream disconnect. Resolve here only for callers that did not, so
+    // the rule still holds for every entry point.
+    const account = options.account || this.#credential(options.accountEmail);
+    log.info("bridge", "converse: account resolved", {
+      sessionId,
+      account: account.email,
+      from: String(options.accountEmail || "").trim() ? "session-owner" : "pool-default",
+    });
     // §4.25 — if the local AgentDock MCP endpoint is up, tell the session about
     // it once (kept deliberately short: long messages trip Arena's reCAPTCHA).
     // Internal probes (体检) must not consume the once-per-session MCP preamble:
@@ -1157,7 +1177,7 @@ export class Bridge {
       // modal if present, fill the composer the Arena模型助手 way, click the real
       // Send button (§4.11), then read ONLY the most-recent turn (§4.12.3).
       const runOnce = async () => {
-        const page = await this.#page();
+        const page = await this.#page(account);
         // Acquire the session public-access-token up front (re-used below).
         let token = "";
         try {
@@ -1284,7 +1304,7 @@ export class Bridge {
             await new Promise((r) => setTimeout(r, 1_500));
             if (!sessionState) break;
             if (parsed.lastEventId) sessionState.lastEventId = parsed.lastEventId;
-            const next = await this.readLatestTurn(await this.#page(), sessionState);
+            const next = await this.readLatestTurn(await this.#page(account), sessionState);
             if (next.token) sessionState.token = next.token;
             if (next.lastEventId) parsed.lastEventId = next.lastEventId;
             for (const call of next.nativeCalls || []) {
@@ -1315,7 +1335,7 @@ export class Bridge {
         } else {
           // Legacy behaviour: conversation-only mode does not execute tools, so
           // stop the remote run and report clearly.
-          await this.stopArenaRun(await this.#page()).catch(() => undefined);
+          await this.stopArenaRun(await this.#page(account)).catch(() => undefined);
           const message =
             `(Arena agent attempted sandbox tool(s): ${names}. ` +
             `Conversation-only mode does not execute tools — run without tools, or drive the session directly in Arena.)`;
@@ -1338,7 +1358,7 @@ export class Bridge {
         sessionState.readBudgetMs = this.config.readBudgetMs > 0 ? 45_000 : 0;
         let again;
         try {
-          again = await this.readLatestTurn(await this.#page(), sessionState);
+          again = await this.readLatestTurn(await this.#page(account), sessionState);
         } catch (error) {
           log.warn("bridge", "converse: re-read failed", {
             sessionId,

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadDotEnv, loadConfig } from "../src/config.mjs";
 import { CredentialStore } from "../src/credentials.mjs";
+import { sessionAccountEmail } from "../src/archive.mjs";
 import { Bridge } from "../src/bridge.mjs";
 import { parseAgentOutput } from "../src/parser.mjs";
 import { requireSecret } from "../src/secret.mjs";
@@ -26,7 +27,8 @@ const credentials = new CredentialStore({ filePath: config.credentialsFile, secr
 const bridge = new Bridge({ config, credentials, recaptcha: null });
 try {
   await bridge.start();
-  const credential = credentials.primary();
+  // Drive the Session with the Account that created it — see credentials.forSession.
+  const credential = credentials.forSession(sessionAccountEmail(config.archiveDir, targetId));
   const page = await bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
   // go to the session page and refresh the public token
   await page.goto(`https://arena.ai/agent/${targetId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });

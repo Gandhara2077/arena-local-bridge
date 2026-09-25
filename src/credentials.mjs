@@ -133,6 +133,47 @@ export class CredentialStore {
     return { ...next, cookieHeader: decrypt(next.cookieHeader, this.key) };
   }
 
+  /**
+   * One named account, with its cookie decrypted. null when the pool has no
+   * such account or it has been rejected — callers decide what that means.
+   */
+  byEmail(email) {
+    const account = this.#find(email);
+    if (!account || account.disabled) return null;
+    return { ...account, cookieHeader: decrypt(account.cookieHeader, this.key) };
+  }
+
+  /**
+   * The account that must drive a Session: its recorded owner when the archive
+   * knows one, otherwise whatever primary() would have picked.
+   *
+   * A known owner is never substituted. Driving Session B with Account A's
+   * cookie does not fail cleanly — Arena renders the session as someone else's,
+   * so the turn dies with a confusing error far from the cause. Refusing here
+   * keeps the failure where the operator can act on it.
+   *
+   * An unknown owner is a different situation: there is nothing to honour, and
+   * old archives and freshly created sessions legitimately have none. Falling
+   * back preserves today's behaviour for those; a wrong guess still fails
+   * loudly on the Arena side.
+   */
+  forSession(ownerEmail = "") {
+    const email = String(ownerEmail || "").trim();
+    if (!email) return this.primary();
+    const account = this.byEmail(email);
+    if (account) return account;
+    const known = this.#find(email);
+    throw Object.assign(
+      new Error(
+        `Session owner ${email} is unavailable: ` +
+          (known
+            ? "the account is disabled — re-enable it with bin/accounts.mjs enable, or pick another Session."
+            : "no such account in the pool — add it with bin/accounts.mjs add, or pick another Session.")
+      ),
+      { status: 409, code: "session_account_unavailable" }
+    );
+  }
+
   /** Reject an account (login failed, or the session is not actually usable). */
   disable(email, reason = "") {
     const account = this.#find(email);
