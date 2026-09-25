@@ -106,6 +106,33 @@ export function readArchiveSessions(archiveDir) {
     .filter((s) => s.sessionId);
 }
 
+/** Hostnames that mean "this machine". Anything else cannot be us. */
+const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * Did this request come from this machine's loopback?
+ *
+ * Binding 127.0.0.1 is not enough on its own. A web page can point its own
+ * domain at 127.0.0.1 (DNS rebinding) and is then same-origin with us, free to
+ * read every response — including /api/status, which hands out the bridge key.
+ * The Host header is what breaks that: after rebinding it still carries the
+ * attacker's domain, not ours.
+ *
+ * A foreign Origin is rejected for the same reason one step earlier. The GUI is
+ * served from this origin, so its own POSTs carry a local Origin and still work.
+ */
+function isLocalRequest(req) {
+  const name = String(req.headers.host || "").replace(/:\d+$/, "").toLowerCase();
+  if (!LOCAL_HOSTS.has(name)) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return LOCAL_HOSTS.has(new URL(origin).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function json(res, status, value, headers = {}) {
   const body = JSON.stringify(value);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), ...headers });
@@ -225,6 +252,11 @@ export function createServer({ bridge, config }) {
   });
 
   const server = http.createServer(async (req, res) => {
+    // Only this machine may talk to us — see isLocalRequest() for why the
+    // loopback bind alone is not enough.
+    if (!isLocalRequest(req)) {
+      return json(res, 403, { error: { message: "This server only answers requests from this machine." } });
+    }
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     // Some OpenAI-compatible clients (and hand-written curl) append a trailing
     // slash to every path ("/v1/models/", "/v1/chat/completions/"). That used to
