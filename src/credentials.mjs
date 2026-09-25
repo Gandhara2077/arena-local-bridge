@@ -60,8 +60,14 @@ export class CredentialStore {
     throw new Error(this.lastLoginError);
   }
 
+  /** Case-insensitive account lookup — the store's one identity rule. */
+  #find(email) {
+    const needle = String(email).toLowerCase();
+    return this.accounts.find((a) => a.email.toLowerCase() === needle) || null;
+  }
+
   upsert({ email, cookieHeader, password, priority = 1 }) {
-    const existing = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    const existing = this.#find(email);
     const entry = {
       email: String(email),
       cookieHeader: this.#encryptCookie(String(cookieHeader)),
@@ -85,7 +91,7 @@ export class CredentialStore {
   }
 
   replaceCookie(email, cookieHeader) {
-    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    const account = this.#find(email);
     if (!account) return false;
     account.cookieHeader = this.#encryptCookie(String(cookieHeader));
     account.updatedAt = new Date().toISOString();
@@ -112,9 +118,8 @@ export class CredentialStore {
    * rather than silently driving a dead session.
    */
   primary() {
-    const enabled = this.#ordered().filter((a) => !a.disabled);
-    if (!enabled.length) return null;
-    return { ...enabled[0], cookieHeader: decrypt(enabled[0].cookieHeader, this.key) };
+    // Same selection as selectNext() with nothing excluded — one code path.
+    return this.selectNext([]);
   }
 
   /**
@@ -130,7 +135,7 @@ export class CredentialStore {
 
   /** Reject an account (login failed, or the session is not actually usable). */
   disable(email, reason = "") {
-    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    const account = this.#find(email);
     if (!account) return false;
     account.disabled = true;
     account.lastError = String(reason || "disabled");
@@ -142,7 +147,7 @@ export class CredentialStore {
   }
 
   enable(email) {
-    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    const account = this.#find(email);
     if (!account) return false;
     account.disabled = false;
     account.lastError = null;
@@ -151,7 +156,7 @@ export class CredentialStore {
   }
 
   setPriority(email, priority) {
-    const account = this.accounts.find((a) => a.email.toLowerCase() === String(email).toLowerCase());
+    const account = this.#find(email);
     if (!account) return false;
     account.priority = Number.isFinite(Number(priority)) ? Number(priority) : 1;
     this.save();

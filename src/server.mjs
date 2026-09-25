@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./util.mjs";
 import { AgentDockManager } from "./agentdock.mjs";
-import { stats as archiveStats, updateModel } from "./archive.mjs";
+import { stats as archiveStats, readEntries, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
 import { installProbe, readModelFromPage } from "./probe.mjs";
@@ -89,22 +89,8 @@ function savePoolState(config, state) {
  * exactly the `model` value the bridge's converse-only driver expects.
  */
 export function readArchiveSessions(archiveDir) {
-  if (!archiveDir) return [];
-  const file = path.join(archiveDir, "记录.json");
-  let raw;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch {
-    return [];
-  }
-  let arr;
-  try {
-    arr = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(arr)) return [];
-  return arr
+  // archive.mjs owns the one rule for reading 记录.json; this only reshapes it.
+  return readEntries(archiveDir)
     .map((e) => {
       const m = String(e.Url || "").match(
         /\/agent\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
@@ -207,6 +193,24 @@ export function createServer({ bridge, config }) {
   // Turns currently being driven by the bridge. Manual health checks must not
   // navigate the shared browser page while one is running.
   let turnsInFlight = 0;
+
+  /**
+   * Shared entry guard for the two ModelPool actions that drive one real turn.
+   * Returns the validated session id, or null when a response was already sent.
+   */
+  async function poolSessionId(req, res) {
+    const body = await readBody(req);
+    const sid = String(body.sessionId || "").trim();
+    if (!isSessionId(sid)) {
+      json(res, 400, { error: { message: "sessionId must be a UUID" } });
+      return null;
+    }
+    if (turnsInFlight > 0) {
+      json(res, 409, busyError());
+      return null;
+    }
+    return sid;
+  }
 
   // 连抽 (session harvesting) + 批量测试. Both are LOCAL operator tools and sit
   // behind the bridge key below; the status endpoints are read-only but still
@@ -337,10 +341,8 @@ export function createServer({ bridge, config }) {
     // Note this DOES append one short message to that session's transcript.
     if (req.method === "POST" && url.pathname === "/api/pool/verify") {
       try {
-        const body = await readBody(req);
-        const sid = String(body.sessionId || "").trim();
-        if (!isSessionId(sid)) return json(res, 400, { error: { message: "sessionId must be a UUID" } });
-        if (turnsInFlight > 0) return json(res, 409, busyError());
+        const sid = await poolSessionId(req, res);
+        if (!sid) return;
         const probe = `[arena-bridge health check ${crypto.randomBytes(4).toString("hex")}] Reply with just: OK`;
         let alive = false;
         let failure = null;
@@ -367,10 +369,8 @@ export function createServer({ bridge, config }) {
     // finally identified, write it back into 记录.json (the source of truth).
     if (req.method === "POST" && url.pathname === "/api/pool/reprobe") {
       try {
-        const body = await readBody(req);
-        const sid = String(body.sessionId || "").trim();
-        if (!isSessionId(sid)) return json(res, 400, { error: { message: "sessionId must be a UUID" } });
-        if (turnsInFlight > 0) return json(res, 409, busyError());
+        const sid = await poolSessionId(req, res);
+        if (!sid) return;
         // installProbe must run BEFORE the navigation: it uses addInitScript.
         const page = await sessionPageFor(bridge);
         await installProbe(page);
@@ -571,15 +571,13 @@ export function createServer({ bridge, config }) {
               ),
               { status: 409, code: "bound_session_dead" }
             );
-          } else {
-            // A Binding is only ever created by an EXPLICIT choice (passing a
-            // session UUID as `model`). "active" is not a choice, so it does
-            // not bind — otherwise a client that merely omits `model` would get
-            // frozen to whichever session the GUI happened to have selected.
-            if (!activeSession) throw noActiveSessionError();
-            target = activeSession;
           }
-        } else {
+        }
+        // A Binding is only ever created by an EXPLICIT choice (passing a session
+        // UUID as `model`). "active" is not a choice, so it does not bind —
+        // otherwise a client that merely omits `model` would get frozen to
+        // whichever session the GUI happened to have selected.
+        if (!target) {
           if (!activeSession) throw noActiveSessionError();
           target = activeSession;
         }

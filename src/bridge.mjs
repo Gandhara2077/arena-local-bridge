@@ -15,8 +15,8 @@ import {
   repeatedToolGuard,
 } from "./parser.mjs";
 import { log, retry } from "./util.mjs";
-import { mcpPreamble, workspaceFromHeaders } from "./mcp-preamble.mjs";
-import { resolveCodexWorkspace, resolveRecentCodexWorkspace } from "./codex-workspace.mjs";
+import { mcpPreamble } from "./mcp-preamble.mjs";
+import { resolveWorkspace } from "./codex-workspace.mjs";
 
 const encoder = new TextEncoder();
 
@@ -114,40 +114,17 @@ export class Bridge {
     if (this.mcpInjected.get(sessionId) === fingerprint) return ""; // already told
     this.mcpInjected.set(sessionId, fingerprint);
     this.#saveMcpInjected();
-    // Which local project this conversation is about. One bridge serves several
-    // conversations, so an explicit header wins; otherwise a Codex session id is
-    // traced back to the working directory Codex recorded; otherwise the
-    // configured default; otherwise say nothing at all.
-    const fromCaller = workspaceFromHeaders(headers);
-    const codexSessionId = String(headers?.["x-codex-session-id"] || "").trim();
-    const fromCodex =
-      fromCaller || !codexSessionId
-        ? ""
-        : resolveCodexWorkspace({ sessionsRoot: this.config.codexSessionsDir, sessionId: codexSessionId });
-    // Last resort when the session id never reaches us (a local proxy sits
-    // between the client and this bridge): the one transcript Codex is writing
-    // right now. Refuses to answer if more than one is active.
-    const fromRecent =
-      fromCaller || fromCodex
-        ? ""
-        : resolveRecentCodexWorkspace({
-            sessionsRoot: this.config.codexSessionsDir,
-            windowMs: this.config.codexRecentWindowMs,
-          });
-    const workspace = fromCaller || fromCodex || fromRecent || this.config.mcpWorkspace;
+    const { workspace, source } = resolveWorkspace({
+      headers,
+      sessionsRoot: this.config.codexSessionsDir,
+      windowMs: this.config.codexRecentWindowMs,
+      fallback: this.config.mcpWorkspace,
+    });
     log.info("bridge", "converse: injecting local MCP endpoint into session", {
       sessionId,
       url,
       workspace: workspace || null,
-      workspaceFrom: fromCaller
-        ? "request-header"
-        : fromCodex
-          ? "codex-session"
-          : fromRecent
-            ? "codex-recent"
-            : workspace
-              ? "config"
-              : "none",
+      workspaceFrom: source,
     });
     return mcpPreamble({ url, token, workspace });
   }

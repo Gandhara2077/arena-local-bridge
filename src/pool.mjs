@@ -93,12 +93,13 @@ export function groupSessions(sessions, state) {
   const st = state || emptyState();
   const buckets = new Map();
   for (const s of sessions || []) {
-    const key = isUnresolved(s.model) ? UNRESOLVED : String(s.model).trim();
+    const unresolved = isUnresolved(s.model);
+    const key = unresolved ? UNRESOLVED : String(s.model).trim();
     if (!buckets.has(key)) buckets.set(key, []);
     const record = st.sessions?.[s.sessionId];
     buckets.get(key).push({
       ...s,
-      unresolved: isUnresolved(s.model),
+      unresolved,
       state: record?.state || OK,
       lastUsedAt: record?.lastUsedAt || null,
       lastFailedAt: record?.lastFailedAt || null,

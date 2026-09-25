@@ -15,6 +15,7 @@
 // name across the whole tree rather than by guessing recent date directories.
 import fs from "node:fs";
 import path from "node:path";
+import { workspaceFromHeaders } from "./mcp-preamble.mjs";
 
 /** Only the head of a transcript is read — `cwd` appears near the start. */
 const HEAD_BYTES = 256 * 1024;
@@ -81,26 +82,35 @@ export function soleRecentTranscript(transcripts, now = Date.now(), windowMs = R
   return recent.length === 1 ? recent[0].file : "";
 }
 
-export function resolveRecentCodexWorkspace({ sessionsRoot, now = Date.now(), windowMs = RECENT_WINDOW_MS } = {}) {
-  if (!sessionsRoot) return "";
+/**
+ * Every transcript under `sessionsRoot`, as {name, file, mtimeMs}. The one
+ * filesystem read both resolvers share: the recursive listing happens once, and
+ * a file that vanishes mid-walk (Codex rotating it) is simply skipped.
+ */
+function listTranscripts(sessionsRoot) {
+  if (!sessionsRoot) return [];
   let entries;
   try {
     entries = fs.readdirSync(sessionsRoot, { recursive: true });
   } catch {
-    return "";
+    return []; // no Codex data here (or an older Node without recursive readdir)
   }
-  const transcripts = [];
+  const out = [];
   for (const relative of entries) {
     const name = String(relative);
     if (!name.toLowerCase().endsWith(".jsonl")) continue;
     const file = path.join(sessionsRoot, name);
     try {
-      transcripts.push({ file, mtimeMs: fs.statSync(file).mtimeMs });
+      out.push({ name, file, mtimeMs: fs.statSync(file).mtimeMs });
     } catch {
       /* raced with Codex rotating the file */
     }
   }
-  const file = soleRecentTranscript(transcripts, now, windowMs);
+  return out;
+}
+
+export function resolveRecentCodexWorkspace({ sessionsRoot, now = Date.now(), windowMs = RECENT_WINDOW_MS } = {}) {
+  const file = soleRecentTranscript(listTranscripts(sessionsRoot), now, windowMs);
   return file ? readCwdOf(file) : "";
 }
 
@@ -109,25 +119,44 @@ export function resolveRecentCodexWorkspace({ sessionsRoot, now = Date.now(), wi
  * Never guesses: an unmatched session id yields "", and the caller falls back.
  */
 export function resolveCodexWorkspace({ sessionsRoot, sessionId } = {}) {
-  if (!sessionsRoot || !sessionId) return "";
-  let entries;
-  try {
-    entries = fs.readdirSync(sessionsRoot, { recursive: true });
-  } catch {
-    return ""; // no Codex data here (or an older Node without recursive readdir)
-  }
-  const matches = matchRolloutNames(entries, sessionId);
-  if (!matches.length) return "";
-
+  const id = String(sessionId || "").trim();
+  if (!id) return "";
+  const all = listTranscripts(sessionsRoot);
+  const wanted = new Set(matchRolloutNames(all.map((t) => t.name), id));
   let best = null;
-  for (const relative of matches) {
-    const file = path.join(sessionsRoot, String(relative));
-    try {
-      const mtime = fs.statSync(file).mtimeMs;
-      if (!best || mtime > best.mtime) best = { file, mtime };
-    } catch {
-      /* raced with Codex rotating the file */
-    }
+  for (const t of all) {
+    if (!wanted.has(t.name)) continue;
+    if (!best || t.mtimeMs > best.mtimeMs) best = t;
   }
   return best ? readCwdOf(best.file) : "";
+}
+
+/**
+ * The local directory this conversation is about, plus where the answer came
+ * from (so the caller can log the provenance). One bridge serves several
+ * conversations, so precedence, highest first:
+ *
+ *   1. an explicit x-arena-workspace header — the caller knows best
+ *   2. the cwd Codex recorded for the session id it sent us
+ *   3. the single transcript Codex is writing right now — the fallback for when
+ *      no session id survives the local proxy hop on this machine
+ *   4. the configured default
+ *
+ * Never invents a path; source "none" means the caller should omit the line.
+ */
+export function resolveWorkspace({ headers = null, sessionsRoot = "", windowMs = RECENT_WINDOW_MS, fallback = "" } = {}) {
+  const fromCaller = workspaceFromHeaders(headers);
+  if (fromCaller) return { workspace: fromCaller, source: "request-header" };
+
+  const sessionId = String(headers?.["x-codex-session-id"] || "").trim();
+  if (sessionId) {
+    const fromCodex = resolveCodexWorkspace({ sessionsRoot, sessionId });
+    if (fromCodex) return { workspace: fromCodex, source: "codex-session" };
+  }
+
+  const fromRecent = resolveRecentCodexWorkspace({ sessionsRoot, windowMs });
+  if (fromRecent) return { workspace: fromRecent, source: "codex-recent" };
+
+  const configured = String(fallback || "").trim();
+  return { workspace: configured, source: configured ? "config" : "none" };
 }

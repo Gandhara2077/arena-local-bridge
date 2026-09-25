@@ -2,6 +2,7 @@
 // Playwright, plus reCAPTCHA v3 token generation. Fully standalone.
 import { createRequire } from "node:module";
 import { retry, log, sleep } from "./util.mjs";
+import { cookieHeaderToObjects } from "./cookie.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -106,7 +107,7 @@ export class ArenaBrowser {
           } catch {}
         }
       });
-      if (cookieHeader) await this.context.addCookies(this.#cookieObjects(cookieHeader));
+      if (cookieHeader) await this.context.addCookies(cookieHeaderToObjects(cookieHeader));
       this.page = await this.context.newPage();
       this.credentialSignature = signature;
     }
@@ -121,25 +122,6 @@ export class ArenaBrowser {
     this.browser = null;
     this.page = null;
     this.recaptchaPage = null;
-  }
-
-  #cookieObjects(raw) {
-    return String(raw || "")
-      .split(";")
-      .map((x) => x.trim())
-      .filter((x) => x.includes("="))
-      .map((x) => {
-        const i = x.indexOf("=");
-        return {
-          name: x.slice(0, i),
-          value: x.slice(i + 1),
-          domain: "arena.ai",
-          path: "/",
-          secure: true,
-          httpOnly: false,
-          sameSite: "Lax",
-        };
-      });
   }
 
   /**

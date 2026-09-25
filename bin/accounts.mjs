@@ -24,6 +24,12 @@ function flag(name) {
   return i >= 0 ? rest[i + 1] : "";
 }
 
+/** The three mutating commands all report the same way and exit the same way. */
+function report(ok, email, done) {
+  console.log(ok ? done : `no such account: ${email}`);
+  process.exitCode = ok ? 0 : 1;
+}
+
 const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || os.homedir(), ".arena-bridge");
 const dotEnv = loadDotEnv(path.join(dataDir, ".env"));
 const config = loadConfig({ ...dotEnv, ...process.env }, { requireBridgeKey: false });
@@ -93,8 +99,7 @@ switch (command) {
       process.exit(2);
     }
     const ok = store.disable(email, rest.slice(1).join(" ") || "manually disabled");
-    console.log(ok ? `disabled ${email}` : `no such account: ${email}`);
-    process.exitCode = ok ? 0 : 1;
+    report(ok, email, `disabled ${email}`);
     break;
   }
 
@@ -105,8 +110,7 @@ switch (command) {
       process.exit(2);
     }
     const ok = store.enable(email);
-    console.log(ok ? `enabled ${email}` : `no such account: ${email}`);
-    process.exitCode = ok ? 0 : 1;
+    report(ok, email, `enabled ${email}`);
     break;
   }
 
@@ -117,8 +121,7 @@ switch (command) {
       process.exit(2);
     }
     const ok = store.setPriority(email, Number(value));
-    console.log(ok ? `${email} priority = ${Number(value)}` : `no such account: ${email}`);
-    process.exitCode = ok ? 0 : 1;
+    report(ok, email, `${email} priority = ${Number(value)}`);
     break;
   }
 

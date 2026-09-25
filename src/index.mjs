@@ -154,7 +154,7 @@ async function main() {
   }, refreshInterval);
   refreshTimer.unref?.();
 
-  // 8. Graceful shutdown
+  // 9. Graceful shutdown
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
