@@ -18,7 +18,7 @@ import { AgentDockManager } from "./agentdock.mjs";
 import { stats as archiveStats, readEntries, removeEntries, sessionAccountEmail, sessionIdFromUrl, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
-import { installProbe, readModelFromPage } from "./probe.mjs";
+import { readModelFromPage } from "./probe.mjs";
 import {
   bind,
   clientSessionId,
@@ -426,9 +426,9 @@ export function createServer({ bridge, config }) {
       try {
         const sid = await poolSessionId(req, res);
         if (!sid) return;
-        // installProbe must run BEFORE the navigation: it uses addInitScript.
+        // ArenaBrowser.getPage has already registered the probe, so it is live
+        // on the navigation below — that ordering is why it lives there.
         const page = await sessionPageFor(bridge);
-        await installProbe(page);
         await page.goto(`https://arena.ai/agent/${sid}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
         const found = await readModelFromPage(page, { timeoutMs: 20_000 });
         if (!found?.model) {

@@ -7,7 +7,7 @@
 //   3. archive.appendEntry() (src/archive.mjs)       -> 记录.json + 清单/汇总
 // The resulting archive is byte-compatible with what the helper produces, so
 // the GUI, /v1/models and the converse-only driver all keep working unchanged.
-import { installProbe, readModelFromPage } from "./probe.mjs";
+import { readModelFromPage } from "./probe.mjs";
 import { appendEntry } from "./archive.mjs";
 import { log } from "./util.mjs";
 
@@ -94,12 +94,10 @@ export class Harvester {
     // each round, so a single page is enough and avoids re-auth churn.
     const page = await this.bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
 
-    // The probe ships with this project (assets/arena-model-probe.inject.js).
-    // It hooks the page's own network traffic, so model attribution and the
-    // reasoning tier come from the same trace the page fetched — no run token,
-    // no extra request.
-    const installed = await installProbe(page);
-    if (!installed.ok) log.warn("harvest", "probe not installed", { error: installed.error });
+    // The page already carries the probe — ArenaBrowser.getPage injects it into
+    // every page it hands out — so model attribution and the reasoning tier come
+    // from the trace the page fetched itself: no run token, no extra request.
+    const probeReady = this.bridge.browser.probeAvailable;
     let consecutiveFailures = 0;
 
     for (let i = 1; i <= total; i++) {
@@ -116,7 +114,7 @@ export class Harvester {
         let model = null;
         let effort = null;
         try {
-          if (installed.ok) {
+          if (probeReady) {
             const hit = await readModelFromPage(page, { timeoutMs: 45_000 });
             model = hit.model || null;
             // The tier comes from the probe's own trace summary — the backend

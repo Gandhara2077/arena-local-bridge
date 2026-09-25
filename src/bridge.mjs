@@ -1428,7 +1428,7 @@ export class Bridge {
    */
   async quotaSnapshot() {
     const account = this.#credential();
-    const page = await this.browser.getPage(account.cookieHeader, account.updatedAt);
+    const page = await this.#page(account);
     const read = async () => {
       // A freshly created context sits on about:blank, where the relative
       // endpoints below would not resolve. Land on the origin first.

@@ -3,6 +3,7 @@
 import { createRequire } from "node:module";
 import { retry, log, sleep } from "./util.mjs";
 import { cookieHeaderToObjects } from "./cookie.mjs";
+import { installProbe } from "./probe.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -38,6 +39,13 @@ export class ArenaBrowser {
     this.page = null;
     this.recaptchaPage = null;
     this.credentialSignature = "";
+    // Pages already carrying the model probe. addInitScript is per-page, and
+    // re-adding it on every call would make each navigation parse the bundle
+    // again — the probe itself no-ops on a same-version repeat, but the parse
+    // is not free.
+    this.probedPages = new WeakSet();
+    // False once we know assets/arena-model-probe.inject.js is missing.
+    this.probeAvailable = true;
   }
 
   async launch() {
@@ -112,6 +120,20 @@ export class ArenaBrowser {
       this.credentialSignature = signature;
     }
     if (!this.page || this.page.isClosed()) this.page = await this.context.newPage();
+    // Every page this bridge drives carries the probe. A conversation run on it
+    // then leaves a trace behind, and the trace's cost spans are where the USD
+    // quota reading comes from — so the probe has to be registered BEFORE the
+    // navigation that carries the turn, which is why it happens here rather
+    // than at each call site.
+    if (!this.probedPages.has(this.page)) {
+      this.probedPages.add(this.page);
+      const installed = await installProbe(this.page);
+      this.probeAvailable = installed.ok;
+      if (!installed.ok) {
+        this.probedPages.delete(this.page); // let a later call retry
+        log.warn("browser", "probe not installed", { error: installed.error });
+      }
+    }
     return this.page;
   }
 
