@@ -19,6 +19,7 @@ import { stats as archiveStats, readEntries, removeEntries, sessionAccountEmail,
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
 import { readSnapshot } from "./probe/index.mjs";
+import { VERSION } from "./version.mjs";
 import {
   bind,
   clientSessionId,
@@ -636,7 +637,7 @@ export function createServer({ bridge, config }) {
     const startedAtReq = Date.now();
     bridge.runtime.requests += 1;
     const responseHeaders = {
-      "X-Arena-Bridge-Version": "5.0.0",
+      "X-Arena-Bridge-Version": VERSION,
       "X-Arena-Bridge-Request-Id": requestId,
     };
     // Set when a streaming (SSE) response has been opened early; used by the

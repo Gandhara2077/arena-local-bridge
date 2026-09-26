@@ -1,6 +1,6 @@
 {
   "name": "arena-local-bridge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Run Arena.ai Agent Mode through a local OpenAI-compatible API, with session harvesting, model identification, archival, and batch testing.",
   "type": "module",
   "license": "MIT",

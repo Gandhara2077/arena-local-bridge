@@ -34,7 +34,7 @@ done
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "==> [1/7] Node.js check"
 if ! command -v node >/dev/null 2>&1; then
-  echo "ERROR: node not found. Install Node.js >= 18 first." >&2; exit 1
+  echo "ERROR: node not found. Install Node.js >= 20 first." >&2; exit 1
 fi
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
 echo "    node $(node -v) (major $NODE_MAJOR)"

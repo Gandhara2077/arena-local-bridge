@@ -15,6 +15,7 @@ import { RecaptchaBroker } from "./recaptcha.mjs";
 import { createServer } from "./server.mjs";
 import { log } from "./util.mjs";
 import { requireSecret } from "./secret.mjs";
+import { VERSION } from "./version.mjs";
 
 const STARTED_AT = Date.now();
 
@@ -26,7 +27,7 @@ async function main() {
   const mergedEnv = { ...dotEnv, ...process.env };
   const config = loadConfig(mergedEnv);
   log.info("boot", "arena-bridge starting", {
-    version: "5.0.0",
+    version: VERSION,
     host: config.host,
     port: config.port,
     dataDir: config.dataDir,

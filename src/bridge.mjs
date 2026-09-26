@@ -18,6 +18,7 @@ import { log, retry } from "./util.mjs";
 import { mcpPreamble } from "./mcp-preamble.mjs";
 import { resolveWorkspace } from "./codex-workspace.mjs";
 import { readSnapshot } from "./probe/index.mjs";
+import { VERSION } from "./version.mjs";
 
 const encoder = new TextEncoder();
 
@@ -1451,7 +1452,7 @@ export class Bridge {
     return {
       ok: true,
       service: "arena-bridge",
-      version: "5.0.0",
+      version: VERSION,
       uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
       mode: "stateless-claude-tools",
       sessions: this.sessions.size,
