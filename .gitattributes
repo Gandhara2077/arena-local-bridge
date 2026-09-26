@@ -1,0 +1,8 @@
+# The probe is assembled into one injectable string. src/probe/assemble.mjs writes
+# the header, prologue and epilogue as CRLF, so the module sources and the built
+# artifact must also be CRLF on every checkout. Without this pin, a checkout with
+# core.autocrlf=false (the default outside Windows) yields LF module bodies, so
+# assembleProbe() no longer matches assets/arena-model-probe.inject.js and the
+# artifact-drift test fails — CI went red on Node 20/22 while Windows stayed green.
+src/probe/modules/*.js text eol=crlf
+assets/arena-model-probe.inject.js text eol=crlf
