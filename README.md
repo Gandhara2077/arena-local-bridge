@@ -1,5 +1,10 @@
 # Arena Local Bridge
 
+[![Test](https://github.com/Gandhara2077/arena-local-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Gandhara2077/arena-local-bridge/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#requirements)
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 Run your own [Arena.ai](https://arena.ai) Agent Mode sessions through a local **OpenAI-compatible API**.
@@ -124,12 +129,11 @@ assets/     Public project assets
 
 Arena does not normally expose the underlying model name in its user-facing blind-battle UI.
 
-This project has two identification paths:
+This repository ships its own page probe. It hooks the network traffic the page already performs, so the model name and the reasoning tier come from the trace the page fetched itself — no run token, no extra request.
 
-1. a locally supplied page probe, when available;
-2. a Node-side fallback that reads the public run trace exposed for the current session.
-
-The optional probe file assets/arena-model-probe.inject.js is **not distributed by this repository** because its licensing/provenance could not be established. The repository therefore remains functional without it.
+- source lives in `src/probe/modules/*.js`;
+- `bin/build-probe.mjs` assembles those modules into the single-file `assets/arena-model-probe.inject.js`;
+- `src/probe/index.mjs` exposes `installProbe(page)` and `readSnapshot(page)`; `readSnapshot` is the only place the project reads from a page.
 
 Model identification is inherently dependent on Arena's current runtime behavior and should not be treated as a permanent public API.
 
@@ -302,9 +306,9 @@ This project does not guarantee compatibility with future Arena releases.
 
 ## Attribution
 
-The core bridge is derived from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge), released under the MIT License. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for attribution and third-party provenance.
+The core bridge is derived from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge), released under the MIT License. Its copyright notice is recorded in [NOTICE.md](NOTICE.md).
 
-No code from the separately referenced Arena Model Assistant probe is distributed with this repository.
+The model-identification probe now ships as source under `src/probe/`, assembled into `assets/arena-model-probe.inject.js` by `bin/build-probe.mjs`. See [NOTICE.md](NOTICE.md) for its provenance.
 
 ## License
 

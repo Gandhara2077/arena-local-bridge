@@ -1,5 +1,10 @@
 # Arena Local Bridge
 
+[![Test](https://github.com/Gandhara2077/arena-local-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Gandhara2077/arena-local-bridge/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#环境要求)
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 通过本地 **OpenAI 兼容 API** 运行你自己的 [Arena.ai](https://arena.ai) Agent Mode 会话。
@@ -124,12 +129,11 @@ assets/     公共项目资源
 
 Arena 的面向用户的盲测 UI 通常不会直接公开底层模型名称。
 
-本项目提供两条识别路径：
+本仓库自带页面探针。它挂在页面自身的网络流量上，因此模型名与推理档位都来自页面自己拉取的 trace——不需要 run token，也不产生额外请求。
 
-1. 在可用时使用本地提供的页面探针；
-2. 使用 Node 端 fallback，读取当前 Session 暴露的公开 run trace。
-
-可选探针文件 assets/arena-model-probe.inject.js **不由本仓库分发**，因为其许可证/来源无法确认。因此，即使没有该文件，仓库仍可正常运行。
+- 源码位于 `src/probe/modules/*.js`；
+- `bin/build-probe.mjs` 把这些模块组装成单文件 `assets/arena-model-probe.inject.js`；
+- `src/probe/index.mjs` 暴露 `installProbe(page)` 与 `readSnapshot(page)`；`readSnapshot` 是全项目唯一读取页面的地方。
 
 模型识别依赖 Arena 当前的运行时行为，因此不应将其视为永久稳定的公开 API。
 
@@ -250,9 +254,9 @@ npm test
 
 ## 来源与致谢
 
-核心 Bridge 源自 [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge)，该项目采用 MIT License。来源和第三方代码/资产说明见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。
+核心 Bridge 源自 [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge)，该项目采用 MIT License。其版权声明记录在 [NOTICE.md](NOTICE.md)。
 
-另行提到的 Arena Model Assistant 探针代码没有被分发在本仓库中。
+模型识别探针现以源码形式位于 `src/probe/`，由 `bin/build-probe.mjs` 组装成 `assets/arena-model-probe.inject.js`，随本仓库分发。其来源见 [NOTICE.md](NOTICE.md)。
 
 ## 许可证
 

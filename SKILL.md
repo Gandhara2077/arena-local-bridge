@@ -86,9 +86,9 @@ Treat this bridge as a local credential-bearing service.
 
 Arena's blind-battle UI does not reliably expose the underlying model name.
 
-The project can use a local page probe when the user supplies a compatible probe file. That file is intentionally not distributed because its licensing/provenance is unresolved.
+The repository ships its own page probe: source in `src/probe/modules/*.js`, assembled by `bin/build-probe.mjs` into `assets/arena-model-probe.inject.js`. It hooks the network traffic the page already performs, so the model name and the reasoning tier come from the trace the page fetched itself — no run token, no extra request.
 
-Without the probe, the bridge can fall back to querying the public run trace associated with the current session. Treat the result as dependent on Arena's current runtime implementation, not as a stable API contract.
+Treat the result as dependent on Arena's current runtime implementation, not as a stable API contract.
 
 ## Harvesting and batch testing
 
