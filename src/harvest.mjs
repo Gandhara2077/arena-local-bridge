@@ -3,11 +3,11 @@
 //
 // This replaces the C# helper's collection loop for our flow:
 //   1. createAgentSession()  (already in bridge.mjs) -> new session + run token
-//   2. readModelFromPage()   (src/probe.mjs)         -> real model name + tier
+//   2. readSnapshot()        (src/probe/index.mjs)   -> real model name + tier
 //   3. archive.appendEntry() (src/archive.mjs)       -> 记录.json + 清单/汇总
 // The resulting archive is byte-compatible with what the helper produces, so
 // the GUI, /v1/models and the converse-only driver all keep working unchanged.
-import { readModelFromPage } from "./probe.mjs";
+import { readSnapshot } from "./probe/index.mjs";
 import { appendEntry } from "./archive.mjs";
 import { log } from "./util.mjs";
 
@@ -115,14 +115,26 @@ export class Harvester {
         let effort = null;
         try {
           if (probeReady) {
-            const hit = await readModelFromPage(page, { timeoutMs: 45_000 });
+            const hit = await readSnapshot(page, { timeoutMs: 45_000 });
             model = hit.model || null;
             // The tier comes from the probe's own trace summary — the backend
             // runs, say, gpt-5.6-sol-low for a requested gpt-5.6-sol. It is
             // reported only when the trace carried it, so it is often empty.
             effort = hit.effort || null;
-            round.via = hit.via;
+            round.via = "page-probe";
             round.runId = hit.runId || null;
+            // One line that says whether the probe was there at all, which is
+            // what separates "the page never loaded it" from "it ran but had
+            // nothing to report".
+            log.info("harvest", "probe snapshot", {
+              sessionId: state.id,
+              probePresent: hit.probePresent,
+              model,
+              effort,
+              runId: hit.runId,
+              usdStatus: hit.usdStatus,
+              percent: hit.percent,
+            });
             if (!model) round.probeError = hit.error || "页面探针未识别出模型";
           }
         } catch (error) {

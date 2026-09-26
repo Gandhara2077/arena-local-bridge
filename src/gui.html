@@ -891,7 +891,11 @@ async function reprobeSession(btn) {
   const sid = btn.dataset.sid;
   const html = btn.innerHTML;
   btn.disabled = true;
-  btn.textContent = "…";
+  btn.textContent = "识别中";
+  // 补标必须真的发一轮对话——探针只有观察到一次 run 才知道模型名，只加载
+  // 页面是拿不到的。所以它和体检一样慢（实测约 90 秒）。不先说清楚的话，
+  // 这一分钟多的等待看起来就像卡死了。
+  toast("正在发一轮对话重新识别…约 1–2 分钟，请勿关闭页面");
   try {
     const r = await mcpApi("/api/pool/reprobe", {
       method: "POST",
@@ -1165,7 +1169,7 @@ async function hvStatus() {
     : s.done ? `<span class="pill grey">成功 ${s.ok} / 共 ${s.done}</span>` : "";
   $("#hvBar").style.width = (s.total ? Math.round((s.done / s.total) * 100) : 0) + "%";
   $("#hvSummary").textContent = s.running
-    ? `进行中 ${s.done}/${s.total} · 成功 ${s.ok} · 失败 ${s.failed}`
+    ? `进行中 ${s.done}/${s.total}`
     : s.done ? `已结束 · 成功 ${s.ok} · 失败 ${s.failed} · 共 ${s.done}` : "未开始";
   const lines = (s.rounds || []).slice().reverse().map((r) => {
     const tail = r.ms ? ` · ${Math.round(r.ms / 100) / 10}s` : "";

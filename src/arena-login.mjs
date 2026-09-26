@@ -3,7 +3,7 @@
 import { createRequire } from "node:module";
 import { retry, log, sleep } from "./util.mjs";
 import { cookieHeaderToObjects } from "./cookie.mjs";
-import { installProbe } from "./probe.mjs";
+import { installProbe } from "./probe/index.mjs";
 
 const require = createRequire(import.meta.url);
 

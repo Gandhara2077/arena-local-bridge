@@ -18,7 +18,7 @@ import { AgentDockManager } from "./agentdock.mjs";
 import { stats as archiveStats, readEntries, removeEntries, sessionAccountEmail, sessionIdFromUrl, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
-import { readModelFromPage } from "./probe.mjs";
+import { readSnapshot } from "./probe/index.mjs";
 import {
   bind,
   clientSessionId,
@@ -420,19 +420,37 @@ export function createServer({ bridge, config }) {
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
       }
     }
-    // 补标 — re-run the probe against an existing session and, if a Model is
-    // finally identified, write it back into 记录.json (the source of truth).
+    // 补标 — identify the Model for a Session that was archived as 未识别, and
+    // write it back into 记录.json (the source of truth).
+    //
+    // It has to drive a real turn to do that. The probe learns the Model by
+    // observing a run; merely loading the Session page produces no run, so a
+    // "just re-read the page" version of this could never succeed. The cost is
+    // the same as 体检: a short message is appended to the transcript.
     if (req.method === "POST" && url.pathname === "/api/pool/reprobe") {
       try {
         const sid = await poolSessionId(req, res);
         if (!sid) return;
-        // ArenaBrowser.getPage has already registered the probe, so it is live
-        // on the navigation below — that ordering is why it lives there.
+        const prompt = `[arena-bridge model probe ${crypto.randomBytes(4).toString("hex")}] Reply with just: OK`;
+        let failure = null;
+        turnsInFlight += 1;
+        try {
+          await bridge.converse(
+            sid,
+            { messages: [{ role: "user", content: prompt }] },
+            { injectMcp: false, accountEmail: sessionAccountEmail(config.archiveDir, sid) }
+          );
+        } catch (error) {
+          failure = error instanceof Error ? error.message : String(error);
+        } finally {
+          turnsInFlight -= 1;
+        }
+        // converse leaves the page on the Session, with the probe having watched
+        // the run — so this read now has something to report.
         const page = await sessionPageFor(bridge);
-        await page.goto(`https://arena.ai/agent/${sid}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-        const found = await readModelFromPage(page, { timeoutMs: 20_000 });
+        const found = await readSnapshot(page, { timeoutMs: 20_000 });
         if (!found?.model) {
-          return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: found?.error || null });
+          return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: failure || found?.error || null });
         }
         const updated = updateModel(config.archiveDir, sid, found.model);
         log.info("server", "pool reprobe", { sessionId: sid, model: found.model, updated: Boolean(updated) });
@@ -486,6 +504,12 @@ export function createServer({ bridge, config }) {
         });
         return json(res, 200, snap);
       } catch (error) {
+        // Log it: a 500 handed to the GUI with no server-side record is
+        // undiagnosable, and this endpoint drives a real browser.
+        log.error("server", "account quota failed", {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? String(error.stack).split("\n").slice(0, 5).join(" | ") : null,
+        });
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
       }
     }
