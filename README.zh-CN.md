@@ -256,7 +256,7 @@ npm test
 
 核心 Bridge 源自 [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge)，该项目采用 MIT License。其版权声明记录在 [NOTICE.md](NOTICE.md)。
 
-模型识别探针现以源码形式位于 `src/probe/`，由 `bin/build-probe.mjs` 组装成 `assets/arena-model-probe.inject.js`，随本仓库分发。其来源见 [NOTICE.md](NOTICE.md)。
+模型识别探针是本项目自身代码：源码位于 `src/probe/`，由 `bin/build-probe.mjs` 组装成单文件产物 `assets/arena-model-probe.inject.js`，随本仓库分发。
 
 ## 许可证
 

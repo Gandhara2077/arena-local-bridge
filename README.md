@@ -308,7 +308,7 @@ This project does not guarantee compatibility with future Arena releases.
 
 The core bridge is derived from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge), released under the MIT License. Its copyright notice is recorded in [NOTICE.md](NOTICE.md).
 
-The model-identification probe now ships as source under `src/probe/`, assembled into `assets/arena-model-probe.inject.js` by `bin/build-probe.mjs`. See [NOTICE.md](NOTICE.md) for its provenance.
+The model-identification probe is part of this project: its source lives under `src/probe/` and `bin/build-probe.mjs` assembles it into the single-file artifact `assets/arena-model-probe.inject.js` that is shipped with the repository.
 
 ## License
 
