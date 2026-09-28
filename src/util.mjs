@@ -12,6 +12,27 @@ export function maskEmail(email) {
   return `${user.slice(0, 1)}***@${domain}`;
 }
 
+// A quick-tunnel URL is a credential: the random subdomain is what keeps it
+// unguessable, and anyone holding it plus the token can reach this machine's
+// workspace. Keep the service domain so a log still says which tunnel came up,
+// hide the part that makes it ours.
+export function maskTunnelUrl(url) {
+  try {
+    const parsed = new URL(String(url));
+    const host = parsed.hostname;
+    // An IP literal or `localhost` carries nothing to hide. Checked explicitly
+    // rather than left to label counting: assigning a masked value to an IPv4
+    // host is silently ignored by URL, which would make this look correct for
+    // the wrong reason.
+    const isIp = /^\d+(\.\d+){3}$/.test(host) || host.startsWith("[");
+    const labels = host.split(".");
+    if (!isIp && labels.length > 2) parsed.hostname = `***.${labels.slice(-2).join(".")}`;
+    return parsed.toString();
+  } catch {
+    return String(url ?? "").replace(/[A-Za-z0-9._-]{8,}/g, "***");
+  }
+}
+
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -7,7 +7,7 @@ import net from "node:net";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import crypto from "node:crypto";
-import { log } from "./util.mjs";
+import { log, maskTunnelUrl } from "./util.mjs";
 
 const URL_RE = /https:\/\/[A-Za-z0-9._-]+\.trycloudflare\.com/;
 
@@ -203,7 +203,9 @@ export class AgentDockManager {
     this.url = url;
     const mcpUrl = `${url}/mcp`;
     this.#publish(mcpUrl, token);
-    log.info("agentdock", "public MCP bridge started", { url: mcpUrl });
+    // Never log the URL itself: its random subdomain is what makes the tunnel
+    // unguessable, so a log line is a credential leak (logs get pasted around).
+    log.info("agentdock", "public MCP bridge started", { url: maskTunnelUrl(mcpUrl) });
     return this.status();
   }
 
