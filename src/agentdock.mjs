@@ -42,9 +42,15 @@ function portOpen(port, host = "127.0.0.1") {
   });
 }
 
-// The two processes this module owns. A PID read back from an earlier run is
-// only ours if the process still answers to one of these names.
-const OUR_IMAGES = new Set(["cloudflared.exe", "agentdock.exe"]);
+// One spawn, every process: the executable path of a live PID can only come from
+// the OS. `tasklist` gives names only, and `wmic` is missing on newer Windows and
+// blacklisted on some machines, so CIM over PowerShell is the portable choice.
+const PROCESS_PATHS_ARGS = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath | ConvertTo-Csv -NoTypeInformation",
+];
 
 function killPid(pid) {
   return new Promise((resolve) => {
@@ -52,35 +58,45 @@ function killPid(pid) {
   });
 }
 
-// `tasklist /FO CSV /NH` → { pid: "image.name" }. Pure, so the deciding rule can
-// be tested without spawning anything.
-export function parseTasklistCsv(csv) {
-  const names = {};
+function capture(cmd, args) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) =>
+      resolve(error ? "" : String(stdout || ""))
+    );
+  });
+}
+
+// `Get-CimInstance Win32_Process | ConvertTo-Csv` → { pid: "C:\…\x.exe" }. Pure,
+// so the deciding rule can be tested without spawning anything. A pid the OS
+// would not give a path for is omitted rather than guessed at.
+export function parseProcessPathsCsv(csv) {
+  const paths = {};
   for (const line of String(csv || "").split(/\r?\n/)) {
-    const m = line.match(/^"([^"]+)","(\d+)"/);
-    if (!m) continue; // header row, blank line, "INFO:" notice
-    const pid = Number(m[2]);
-    if (Number.isSafeInteger(pid)) names[String(pid)] = m[1].toLowerCase();
+    const m = line.match(/^"(\d+)","(.+?)"$/);
+    if (!m) continue; // header row, blank line, an error notice, an empty path
+    const pid = Number(m[1]);
+    if (Number.isSafeInteger(pid) && m[2].trim()) paths[String(pid)] = m[2];
   }
-  return names;
+  return paths;
 }
 
 // Which PIDs may we stop?
 //   tracked   — spawned by THIS process, ours by construction
-//   persisted — left over from an earlier run; a recycled PID can belong to
-//               anything, so it only qualifies while its image name is one of ours
-function capture(cmd, args) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { windowsHide: true }, (error, stdout) => resolve(error ? "" : String(stdout || "")));
-  });
-}
-
-export function pidsToStop({ tracked = [], persisted = [], names = {}, selfPid = 0 } = {}) {
+//   persisted — left over from an earlier run. A recycled PID can belong to
+//               anything, and sharing an image name proves nothing, so the only
+//               evidence accepted is that the executable path is the one
+//               recorded when we spawned it. No observable path ⇒ not ours.
+export function pidsToStop({ tracked = [], persisted = [], paths = {}, selfPid = 0 } = {}) {
+  const samePath = (a, b) =>
+    String(a || "").replace(/\\/g, "/").toLowerCase() === String(b || "").replace(/\\/g, "/").toLowerCase();
   const out = [];
-  for (const pid of [...tracked, ...persisted]) {
+  for (const entry of [...tracked, ...persisted]) {
+    // New records are { pid, exe }; a legacy bare number has no path to check.
+    const record = entry && typeof entry === "object" ? entry : null;
+    const pid = record ? record.pid : entry;
     if (!Number.isSafeInteger(pid) || pid <= 0 || pid === selfPid) continue;
     if (out.includes(pid)) continue;
-    const ours = tracked.includes(pid) || OUR_IMAGES.has(String(names[String(pid)] || "").toLowerCase());
+    const ours = tracked.includes(pid) || (record && record.exe && samePath(paths[String(pid)], record.exe));
     if (ours) out.push(pid);
   }
   return out;
@@ -204,7 +220,7 @@ export class AgentDockManager {
     if (this.tunnel || this.service) return this.status();
 
     // Sweep leftovers from a run that never got to clean up before we add ours.
-    await this.#stopPids({ persisted: this.#readPersistedPids() });
+    await this.#stopPids({ persisted: this.#readPersisted() });
 
     const { agentdock, cloudflared } = this.exe;
     const logs = this.logPaths;
@@ -271,11 +287,7 @@ export class AgentDockManager {
     this.service.unref?.();
 
     this.url = url;
-    try {
-      fs.writeFileSync(this.pidFile, JSON.stringify([this.tunnel?.pid, this.service?.pid].filter(Boolean)));
-    } catch {
-      /* ignore */
-    }
+    this.#persistSpawned();
     const mcpUrl = `${url}/mcp`;
     this.#publish(mcpUrl, token);
     // Never log the URL itself: its random subdomain is what makes the tunnel
@@ -284,16 +296,30 @@ export class AgentDockManager {
     return this.status();
   }
 
-  #readPersistedPids() {
+  #readPersisted() {
     try {
       const raw = JSON.parse(fs.readFileSync(this.pidFile, "utf8"));
-      return Array.isArray(raw) ? raw.filter((pid) => Number.isSafeInteger(pid)) : [];
+      return Array.isArray(raw) ? raw : [];
     } catch {
       return [];
     }
   }
 
-  #clearPersistedPids() {
+  #persistSpawned() {
+    const records = [
+      this.tunnel?.pid && { pid: this.tunnel.pid, exe: this.exe.cloudflared },
+      this.service?.pid && { pid: this.service.pid, exe: this.exe.agentdock },
+    ].filter(Boolean);
+    try {
+      // Reusing the secret writer for the atomic .tmp + rename: a half-written
+      // file would be read back as a truncated pid list and kill nothing.
+      writeSecretFile(this.pidFile, JSON.stringify(records));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  #clearPersisted() {
     try {
       fs.rmSync(this.pidFile, { force: true });
     } catch {
@@ -302,8 +328,12 @@ export class AgentDockManager {
   }
 
   async #stopPids({ tracked = [], persisted = [] } = {}) {
-    const names = parseTasklistCsv(await capture("tasklist", ["/FO", "CSV", "/NH"]));
-    const pids = pidsToStop({ tracked, persisted, names, selfPid: process.pid });
+    // Only worth asking the OS when there is something from an earlier run to
+    // check; our own children need no evidence.
+    const paths = persisted.length
+      ? parseProcessPathsCsv(await capture("powershell", PROCESS_PATHS_ARGS))
+      : {};
+    const pids = pidsToStop({ tracked, persisted, paths, selfPid: process.pid });
     for (const pid of pids) await killPid(pid);
     if (pids.length) log.info("agentdock", "stopping tunnel processes", { pids });
     return pids;
@@ -314,9 +344,9 @@ export class AgentDockManager {
     // anyone else's cloudflared along with ours.
     await this.#stopPids({
       tracked: [this.tunnel?.pid, this.service?.pid].filter(Boolean),
-      persisted: this.#readPersistedPids(),
+      persisted: this.#readPersisted(),
     });
-    this.#clearPersistedPids();
+    this.#clearPersisted();
     this.tunnel = null;
     this.service = null;
     this.url = "";
