@@ -14,7 +14,7 @@ import {
   parseNativeToolCalls,
   repeatedToolGuard,
 } from "./parser.mjs";
-import { log, retry } from "./util.mjs";
+import { log, retry, maskTunnelUrl } from "./util.mjs";
 import { mcpPreamble } from "./mcp-preamble.mjs";
 import { resolveWorkspace } from "./codex-workspace.mjs";
 import { readSnapshot } from "./probe/index.mjs";
@@ -32,25 +32,14 @@ const encoder = new TextEncoder();
 // to fire: the key missed, the client's timeout resubmitted, and Arena ran the
 // turn twice.
 //
-// Kept as a pure function so that this invariant is testable — see
-// test/bridge.test.mjs. It lives here rather than in util.mjs because the Arena
-// prompt shapes are this module's business, not a shared helper.
-export function prepareTurnInput({ sessionId, prompt, preamble = "", marker = "" }) {
-  let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
-  if (marker) {
-    finalPrompt = `${finalPrompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
-  }
-  return {
-    key: `${sessionId}|${crypto.createHash("sha1").update(prompt).digest("hex")}`,
-    finalPrompt,
-  };
-}
-
-// The header a caller uses to say "this is the same request as before".
-export const IDEMPOTENCY_HEADER = "x-arena-idempotency-key";
-
 // Joining a run that is STILL GOING and replaying one that ALREADY FINISHED are
-// two different decisions, and they need two different keys.
+// two different decisions, so they get two different keys — but BOTH are derived
+// here, from the one argument that is still the caller's own request.
+//
+// That placement is the whole point. When the replay key was built at the call
+// site, the caller had already reassigned `prompt` to the decorated text, so the
+// preamble and the fresh marker leaked back into it and a named retry could
+// never match. Deriving both keys in one function makes that mistake impossible.
 //
 // Joining is safe on `session + logical request`: if the identical request is
 // still running, handing back the same work is exactly what stops a client
@@ -59,14 +48,27 @@ export const IDEMPOTENCY_HEADER = "x-arena-idempotency-key";
 // Replaying is not. Two identical prompts in a row may just be the caller asking
 // the same thing twice, and only the caller knows which it is. So a finished
 // result is replayed only when the request carries an explicit identity; with no
-// identity there is no replay key at all, and the second prompt starts a new
-// turn. Swallowing a legitimate second turn is worse than the rare duplicate
-// this used to prevent.
-export function completedReplayKey({ sessionId, prompt, idempotencyKey = "" }) {
-  const given = String(idempotencyKey || "").trim();
-  if (!given) return "";
-  return `${sessionId}|${crypto.createHash("sha1").update(`${given}\n${prompt}`).digest("hex")}`;
+// identity the replay key is empty, and the second prompt starts a new turn.
+//
+// Kept as a pure function so that this invariant is testable — see
+// test/bridge.test.mjs. It lives here rather than in util.mjs because the Arena
+// prompt shapes are this module's business, not a shared helper.
+export function prepareTurnInput({ sessionId, prompt, preamble = "", marker = "", idempotencyKey = "" }) {
+  let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
+  if (marker) {
+    finalPrompt = `${finalPrompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
+  }
+  const digest = (value) => crypto.createHash("sha1").update(value).digest("hex");
+  const identity = String(idempotencyKey || "").trim();
+  return {
+    inflightKey: `${sessionId}|${digest(prompt)}`,
+    replayKey: identity ? `${sessionId}|${digest(`${identity}\n${prompt}`)}` : "",
+    finalPrompt,
+  };
 }
+
+// The header a caller uses to say "this is the same request as before".
+export const IDEMPOTENCY_HEADER = "x-arena-idempotency-key";
 
 export class Bridge {
   constructor({ config, credentials, recaptcha, startedAt = Date.now() }) {
@@ -170,7 +172,9 @@ export class Bridge {
     });
     log.info("bridge", "converse: injecting local MCP endpoint into session", {
       sessionId,
-      url,
+      // Masked like the AgentDock start line: the random subdomain is what makes
+      // the tunnel unguessable, so the URL is a credential once the logs travel.
+      url: maskTunnelUrl(url),
       workspace: workspace || null,
       workspaceFrom: source,
     });
@@ -1159,14 +1163,15 @@ export class Bridge {
       ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
       : "";
 
-    // §4.33 — the dedupe key must describe the caller's LOGICAL request, so it is
-    // derived BEFORE the preamble and the marker are applied. See prepareTurnInput
-    // for what went wrong when it wasn't.
-    const { key: inflightKey, finalPrompt } = prepareTurnInput({
+    // §4.33 — both keys must describe the caller's LOGICAL request, so both are
+    // derived in here, before the preamble and the marker are applied. Note that
+    // both come from the same argument: the decorated text never reaches a key.
+    const { inflightKey, replayKey, finalPrompt } = prepareTurnInput({
       sessionId,
       prompt,
       preamble: mcpLine,
       marker,
+      idempotencyKey: String(options.headers?.[IDEMPOTENCY_HEADER] || options.idempotencyKey || ""),
     });
     prompt = finalPrompt;
     if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
@@ -1179,12 +1184,7 @@ export class Bridge {
     // §4.33 — a retry that arrives AFTER the first run already finished must not
     // re-send the prompt into the Arena session. But only the caller can tell a
     // retry apart from asking the same thing again, so a finished result is
-    // replayed only when the request names itself. See completedReplayKey.
-    const replayKey = completedReplayKey({
-      sessionId,
-      prompt,
-      idempotencyKey: String(options.headers?.[IDEMPOTENCY_HEADER] || options.idempotencyKey || ""),
-    });
+    // replayed only when the request names itself.
     const cached = replayKey ? this.resultCache.get(replayKey) : null;
     if (cached && cached.expiresAt > Date.now()) {
       log.info("bridge", "converse: served from idempotency cache (client retry)", { sessionId });
@@ -1461,7 +1461,7 @@ export class Bridge {
     work.then((payload) => {
       // §4.33 — remember the result briefly so a later retry of the SAME request is
       // idempotent. No identity ⇒ nothing to remember and nothing to match, because
-      // the next identical prompt may well be a new turn. See completedReplayKey.
+      // the next identical prompt may well be a new turn. See prepareTurnInput.
       if (replayKey && this.config.resultCacheTtlMs > 0 && payload) {
         this.resultCache.set(replayKey, { payload, expiresAt: Date.now() + this.config.resultCacheTtlMs });
         while (this.resultCache.size > 50) {

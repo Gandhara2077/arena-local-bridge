@@ -136,6 +136,17 @@ function isLocalRequest(req) {
   }
 }
 
+/**
+ * /api/status hands the bridge key to the caller so the GUI can show it and the
+ * user can paste it into a client. That is acceptable only while this process is
+ * reachable from this machine alone: with a non-loopback HOST the Host check can
+ * simply be spoofed, and the key would go out with the response. HOST is an env
+ * override, so the invariant behind ADR 0004 is asserted here rather than assumed.
+ */
+export function exposesBridgeKey(config) {
+  return LOCAL_HOSTS.has(String(config?.host || "").toLowerCase());
+}
+
 function json(res, status, value, headers = {}) {
   const body = JSON.stringify(value);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), ...headers });
@@ -339,7 +350,7 @@ export function createServer({ bridge, config }) {
         apiBase: `${origin}/v1`,
         chatEndpoint: `${origin}/v1/chat/completions`,
         proxyUrl: `${origin}/v1`,
-        apiKey: config.bridgeKey,
+        apiKey: exposesBridgeKey(config) ? config.bridgeKey : "",
         activeSession,
         model: activeSession,
         accounts: accountsWithQuota(),
