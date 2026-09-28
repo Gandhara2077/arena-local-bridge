@@ -22,6 +22,30 @@ import { VERSION } from "./version.mjs";
 
 const encoder = new TextEncoder();
 
+// Assemble what actually goes into Arena, and derive the idempotency key from
+// the CALLER's logical request rather than from that finished text.
+//
+// Two things get added after the logical request is known — the local MCP
+// preamble (once per Session, §4.25) and a random end-of-turn marker (once per
+// request, §4.36). Keying off the finished text therefore gave a client retry a
+// different key than its first attempt, which is exactly the moment dedupe has
+// to fire: the key missed, the client's timeout resubmitted, and Arena ran the
+// turn twice.
+//
+// Kept as a pure function so that this invariant is testable — see
+// test/bridge.test.mjs. It lives here rather than in util.mjs because the Arena
+// prompt shapes are this module's business, not a shared helper.
+export function prepareTurnInput({ sessionId, prompt, preamble = "", marker = "" }) {
+  let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
+  if (marker) {
+    finalPrompt = `${finalPrompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
+  }
+  return {
+    key: `${sessionId}|${crypto.createHash("sha1").update(prompt).digest("hex")}`,
+    finalPrompt,
+  };
+}
+
 export class Bridge {
   constructor({ config, credentials, recaptcha, startedAt = Date.now() }) {
     this.config = config;
@@ -1104,7 +1128,6 @@ export class Bridge {
     // injection is one-shot, so a health check would spend it and the real
     // conversation would never be told about the workspace.
     const mcpLine = options.injectMcp === false ? "" : this.#mcpEndpointLine(sessionId, options.headers || null);
-    if (mcpLine) prompt = `${mcpLine}\n${prompt}`;
 
     // §4.36 — explicit end-of-turn marker (random per request). When the agent
     // echoes it we KNOW the turn is over, instead of inferring it from finish
@@ -1113,15 +1136,19 @@ export class Bridge {
     const marker = this.config.turnMarkerEnabled
       ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
       : "";
-    if (marker) {
-      prompt = `${prompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
-      log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
-    }
 
-    // §4.28 — a client-side TIMEOUT makes Codex RETRY the same request, which used
-    // to send a DUPLICATE question into the Arena session and queue a second 90s+
-    // run behind the first. Join identical in-flight calls onto one run instead.
-    const inflightKey = `${sessionId}|${crypto.createHash("sha1").update(prompt).digest("hex")}`;
+    // §4.33 — the dedupe key must describe the caller's LOGICAL request, so it is
+    // derived BEFORE the preamble and the marker are applied. See prepareTurnInput
+    // for what went wrong when it wasn't.
+    const { key: inflightKey, finalPrompt } = prepareTurnInput({
+      sessionId,
+      prompt,
+      preamble: mcpLine,
+      marker,
+    });
+    prompt = finalPrompt;
+    if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
+
     const existing = this.inflight.get(inflightKey);
     if (existing) {
       log.info("bridge", "converse: joining identical in-flight request (client retry)", { sessionId });
