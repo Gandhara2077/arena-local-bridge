@@ -28,10 +28,48 @@ function portOpen(port, host = "127.0.0.1") {
   });
 }
 
+// The two processes this module owns. A PID read back from an earlier run is
+// only ours if the process still answers to one of these names.
+const OUR_IMAGES = new Set(["cloudflared.exe", "agentdock.exe"]);
+
 function killPid(pid) {
   return new Promise((resolve) => {
     execFile("taskkill", ["/F", "/PID", String(pid)], () => resolve());
   });
+}
+
+// `tasklist /FO CSV /NH` → { pid: "image.name" }. Pure, so the deciding rule can
+// be tested without spawning anything.
+export function parseTasklistCsv(csv) {
+  const names = {};
+  for (const line of String(csv || "").split(/\r?\n/)) {
+    const m = line.match(/^"([^"]+)","(\d+)"/);
+    if (!m) continue; // header row, blank line, "INFO:" notice
+    const pid = Number(m[2]);
+    if (Number.isSafeInteger(pid)) names[String(pid)] = m[1].toLowerCase();
+  }
+  return names;
+}
+
+// Which PIDs may we stop?
+//   tracked   — spawned by THIS process, ours by construction
+//   persisted — left over from an earlier run; a recycled PID can belong to
+//               anything, so it only qualifies while its image name is one of ours
+function capture(cmd, args) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { windowsHide: true }, (error, stdout) => resolve(error ? "" : String(stdout || "")));
+  });
+}
+
+export function pidsToStop({ tracked = [], persisted = [], names = {}, selfPid = 0 } = {}) {
+  const out = [];
+  for (const pid of [...tracked, ...persisted]) {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === selfPid) continue;
+    if (out.includes(pid)) continue;
+    const ours = tracked.includes(pid) || OUR_IMAGES.has(String(names[String(pid)] || "").toLowerCase());
+    if (ours) out.push(pid);
+  }
+  return out;
 }
 
 export class AgentDockManager {
@@ -50,6 +88,12 @@ export class AgentDockManager {
       agentdock: path.join(this.dir, "agentdock.exe"),
       cloudflared: path.join(this.dir, "cloudflared.exe"),
     };
+  }
+
+  // PIDs we own, kept so a run that never got to clean up (crash, closed
+  // console) can still be swept on the next start.
+  get pidFile() {
+    return path.join(this.dataDir || this.dir, "agentdock-pids.json");
   }
 
   get logPaths() {
@@ -136,6 +180,9 @@ export class AgentDockManager {
     }
     if (this.tunnel || this.service) return this.status();
 
+    // Sweep leftovers from a run that never got to clean up before we add ours.
+    await this.#stopPids({ persisted: this.#readPersistedPids() });
+
     const { agentdock, cloudflared } = this.exe;
     const logs = this.logPaths;
     for (const p of [logs.tunnel, logs.tunnelErr]) {
@@ -201,22 +248,50 @@ export class AgentDockManager {
     this.service.unref?.();
 
     this.url = url;
+    try {
+      fs.writeFileSync(this.pidFile, JSON.stringify([this.tunnel?.pid, this.service?.pid].filter(Boolean)));
+    } catch {
+      /* ignore */
+    }
     const mcpUrl = `${url}/mcp`;
     this.#publish(mcpUrl, token);
     log.info("agentdock", "public MCP bridge started", { url: mcpUrl });
     return this.status();
   }
 
-  async stop() {
-    const pids = [this.tunnel?.pid, this.service?.pid].filter(Boolean);
+  #readPersistedPids() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.pidFile, "utf8"));
+      return Array.isArray(raw) ? raw.filter((pid) => Number.isSafeInteger(pid)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  #clearPersistedPids() {
+    try {
+      fs.rmSync(this.pidFile, { force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async #stopPids({ tracked = [], persisted = [] } = {}) {
+    const names = parseTasklistCsv(await capture("tasklist", ["/FO", "CSV", "/NH"]));
+    const pids = pidsToStop({ tracked, persisted, names, selfPid: process.pid });
     for (const pid of pids) await killPid(pid);
-    // Belt and braces: catch anything started outside this process.
-    await new Promise((resolve) =>
-      execFile("taskkill", ["/F", "/IM", "cloudflared.exe"], () => resolve())
-    );
-    await new Promise((resolve) =>
-      execFile("taskkill", ["/F", "/IM", "agentdock.exe"], () => resolve())
-    );
+    if (pids.length) log.info("agentdock", "stopping tunnel processes", { pids });
+    return pids;
+  }
+
+  async stop() {
+    // Only what we started — never a sweep by image name, which used to take out
+    // anyone else's cloudflared along with ours.
+    await this.#stopPids({
+      tracked: [this.tunnel?.pid, this.service?.pid].filter(Boolean),
+      persisted: this.#readPersistedPids(),
+    });
+    this.#clearPersistedPids();
     this.tunnel = null;
     this.service = null;
     this.url = "";
