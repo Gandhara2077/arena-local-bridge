@@ -68,10 +68,14 @@ function noActiveSessionError() {
   );
 }
 
-/** The shared browser page for operator actions (caller drives the navigation). */
+/**
+ * The browser page for operator actions (caller drives the navigation). These
+ * are short, single-navigation actions taken with the pool's primary Account, so
+ * they hold no lease: if a refresh lands mid-navigation the action fails visibly
+ * and can simply be repeated.
+ */
 async function sessionPageFor(bridge) {
-  const credential = bridge.credentials?.primary?.() || null;
-  return bridge.browser.getPage(credential?.cookieHeader || "", credential?.updatedAt);
+  return bridge.browser.getPage(bridge.credentials?.primary?.() || null);
 }
 
 function busyError() {
@@ -459,8 +463,12 @@ export function createServer({ bridge, config }) {
         }
         // converse leaves the page on the Session, with the probe having watched
         // the run — so this read now has something to report.
-        const page = await sessionPageFor(bridge);
-        const found = await readSnapshot(page, { timeoutMs: 20_000 });
+        //
+        // Up to 20s on a page: not a moment, so it holds the Account's context
+        // like any other long operation.
+        const found = await bridge.browser.withAccount(bridge.credentials?.primary?.() || null, async () => {
+          return readSnapshot(await sessionPageFor(bridge), { timeoutMs: 20_000 });
+        });
         if (!found?.model) {
           return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: failure || found?.error || null });
         }
@@ -612,7 +620,7 @@ export function createServer({ bridge, config }) {
     if (req.method === "POST" && url.pathname === "/recaptcha") {
       const credential = bridge.credentials.primary();
       try {
-        const token = await bridge.recaptcha.get(credential?.cookieHeader, true);
+        const token = await bridge.recaptcha.get(credential, true);
         return json(res, 200, { token, action: "chat_submit" });
       } catch (error) {
         return json(
