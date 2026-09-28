@@ -46,6 +46,28 @@ export function prepareTurnInput({ sessionId, prompt, preamble = "", marker = ""
   };
 }
 
+// The header a caller uses to say "this is the same request as before".
+export const IDEMPOTENCY_HEADER = "x-arena-idempotency-key";
+
+// Joining a run that is STILL GOING and replaying one that ALREADY FINISHED are
+// two different decisions, and they need two different keys.
+//
+// Joining is safe on `session + logical request`: if the identical request is
+// still running, handing back the same work is exactly what stops a client
+// timeout from turning into a second Arena turn.
+//
+// Replaying is not. Two identical prompts in a row may just be the caller asking
+// the same thing twice, and only the caller knows which it is. So a finished
+// result is replayed only when the request carries an explicit identity; with no
+// identity there is no replay key at all, and the second prompt starts a new
+// turn. Swallowing a legitimate second turn is worse than the rare duplicate
+// this used to prevent.
+export function completedReplayKey({ sessionId, prompt, idempotencyKey = "" }) {
+  const given = String(idempotencyKey || "").trim();
+  if (!given) return "";
+  return `${sessionId}|${crypto.createHash("sha1").update(`${given}\n${prompt}`).digest("hex")}`;
+}
+
 export class Bridge {
   constructor({ config, credentials, recaptcha, startedAt = Date.now() }) {
     this.config = config;
@@ -1155,8 +1177,15 @@ export class Bridge {
       return existing;
     }
     // §4.33 — a retry that arrives AFTER the first run already finished must not
-    // re-send the prompt into the Arena session.
-    const cached = this.resultCache.get(inflightKey);
+    // re-send the prompt into the Arena session. But only the caller can tell a
+    // retry apart from asking the same thing again, so a finished result is
+    // replayed only when the request names itself. See completedReplayKey.
+    const replayKey = completedReplayKey({
+      sessionId,
+      prompt,
+      idempotencyKey: String(options.headers?.[IDEMPOTENCY_HEADER] || options.idempotencyKey || ""),
+    });
+    const cached = replayKey ? this.resultCache.get(replayKey) : null;
     if (cached && cached.expiresAt > Date.now()) {
       log.info("bridge", "converse: served from idempotency cache (client retry)", { sessionId });
       return cached.payload;
@@ -1430,9 +1459,11 @@ export class Bridge {
     this.inflight.set(inflightKey, work);
     const cleanup = () => this.inflight.delete(inflightKey);
     work.then((payload) => {
-      // §4.33 — remember the result briefly so a later retry is idempotent.
-      if (this.config.resultCacheTtlMs > 0 && payload) {
-        this.resultCache.set(inflightKey, { payload, expiresAt: Date.now() + this.config.resultCacheTtlMs });
+      // §4.33 — remember the result briefly so a later retry of the SAME request is
+      // idempotent. No identity ⇒ nothing to remember and nothing to match, because
+      // the next identical prompt may well be a new turn. See completedReplayKey.
+      if (replayKey && this.config.resultCacheTtlMs > 0 && payload) {
+        this.resultCache.set(replayKey, { payload, expiresAt: Date.now() + this.config.resultCacheTtlMs });
         while (this.resultCache.size > 50) {
           const oldest = this.resultCache.keys().next().value;
           if (oldest === undefined) break;

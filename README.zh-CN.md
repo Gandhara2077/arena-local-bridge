@@ -156,7 +156,7 @@ Arena 的面向用户的盲测 UI 通常不会直接公开底层模型名称。
 GET /api/sessions 除扁平化的 sessions 列表外，还会返回 groups（模型池）。每个 Session 都带有 ok 或 suspected-dead 状态。
 
 - 只有当针对某个 Session 的请求实际失败时，该 Session 才会被标记为 **suspected-dead**。这是唯一可信的信号：没有基于时间的衰减，也没有健康分数。
-- POST /api/pool/verify（Body：{"sessionId": "<uuid>"}）会通过发送**一次真实 turn**并使用唯一 nonce 进行手动检查，然后将 Session 标记为存活或 suspected-dead。仅仅能够渲染页面并不能证明 Session 仍然可以回答；固定的探针字符串又可能直接命中 Bridge 的幂等缓存而根本不会到达 Arena，因此必须使用 nonce。**该操作会向 Session 的 transcript 追加一条简短消息。** 这是手动操作：不会后台轮询，因此不会替你消耗 Session 生命周期。
+- POST /api/pool/verify（Body：{"sessionId": "<uuid>"}）会通过发送**一次真实 turn**并使用唯一 nonce 进行手动检查，然后将 Session 标记为存活或 suspected-dead。仅仅能够渲染页面并不能证明 Session 仍然可以回答，因此必须真的发问；nonce 用于保证每次都是一次独立的 turn。（已完成的 turn 只有在请求带上 `x-arena-idempotency-key` 时才会被重放，所以单纯的文本相同不会短路掉一次新的 turn。）**该操作会向 Session 的 transcript 追加一条简短消息。** 这是手动操作：不会后台轮询，因此不会替你消耗 Session 生命周期。
 - POST /api/pool/reprobe（Body：{"sessionId": "<uuid>"}）会重新执行指定 Session 的模型识别；如果识别到 Model，则会将结果写回 记录.json。
 
 健康状态保存在数据目录中的 sidecar 文件（pool-state.json），其中只保存 Session 状态和绑定关系。记录.json 仍然是 Session 数据的唯一事实来源；删除 sidecar 后，每个 Session 都会重新显示为 ok。

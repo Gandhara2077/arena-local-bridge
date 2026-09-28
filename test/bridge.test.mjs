@@ -8,7 +8,7 @@
 // timeout would send the turn into Arena a second time.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { prepareTurnInput } from "../src/bridge.mjs";
+import { prepareTurnInput, completedReplayKey, IDEMPOTENCY_HEADER } from "../src/bridge.mjs";
 
 const SID_A = "3f2a1b4c-5d6e-4a7b-8c9d-0e1f2a3b4c5d";
 const SID_B = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -55,6 +55,34 @@ test("prepareTurnInput: different logical request ⇒ different key", () => {
   const a = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
   const b = prepareTurnInput({ sessionId: SID_A, prompt: "hello?" });
   assert.notEqual(a.key, b.key);
+});
+
+// Finished-result replay is a different decision from joining a running turn, and
+// it only happens when the caller names the request. These four pin that down.
+test("completedReplayKey: a request with no identity is never replayed", () => {
+  // This is the whole point: sending the SAME prompt again is not proof of a retry.
+  assert.equal(completedReplayKey({ sessionId: SID_A, prompt: "hello" }), "");
+  assert.equal(completedReplayKey({ sessionId: SID_A, prompt: "hello", idempotencyKey: "" }), "");
+  assert.equal(completedReplayKey({ sessionId: SID_A, prompt: "hello", idempotencyKey: "   " }), "");
+});
+
+test("completedReplayKey: the same identity replays, a different one does not", () => {
+  const first = completedReplayKey({ sessionId: SID_A, prompt: "hello", idempotencyKey: "req-1" });
+  const retry = completedReplayKey({ sessionId: SID_A, prompt: "hello", idempotencyKey: "req-1" });
+  const other = completedReplayKey({ sessionId: SID_A, prompt: "hello", idempotencyKey: "req-2" });
+  assert.notEqual(first, "");
+  assert.equal(first, retry);
+  assert.notEqual(first, other);
+});
+
+test("completedReplayKey: scoped to the Session and the prompt", () => {
+  const base = completedReplayKey({ sessionId: SID_A, prompt: "hello", idempotencyKey: "req-1" });
+  assert.notEqual(base, completedReplayKey({ sessionId: SID_B, prompt: "hello", idempotencyKey: "req-1" }));
+  assert.notEqual(base, completedReplayKey({ sessionId: SID_A, prompt: "other", idempotencyKey: "req-1" }));
+});
+
+test("IDEMPOTENCY_HEADER: the caller-facing name is stable", () => {
+  assert.equal(IDEMPOTENCY_HEADER, "x-arena-idempotency-key");
 });
 
 test("prepareTurnInput: keeps the existing Arena prompt shapes", () => {
