@@ -82,10 +82,10 @@ export function loadConfig(env = {}, { requireBridgeKey = true } = {}) {
     // §4.30 — bounded re-reads when /out ends (or only replays) without our answer.
     readRetryMax: Number(env.ARENA_READ_RETRY_MAX || 3),
     readRetryDelayMs: Number(env.ARENA_READ_RETRY_DELAY_MS || 3_000),
-    // §4.33 — how long an identical request may be answered from cache instead of
-    // being re-sent to Arena (guards client retries after a timeout). Kept short
-    // on purpose: re-asking the same thing by hand inside this window would also
-    // hit the cache. 0 disables.
+    // §4.33 — how long a FINISHED turn may be replayed instead of being re-sent to
+    // Arena (guards a client retry that arrives after the run already completed).
+    // Only requests carrying an explicit identity are ever replayed, so re-asking
+    // the same thing by hand always starts a new turn. 0 disables.
     resultCacheTtlMs: Number(env.ARENA_RESULT_CACHE_TTL_MS || 120_000),
     // §4.25 — file written by start-arena-mcp.ps1 while the tunnel is up
     // ({ url, token }); absent/empty => no injection.

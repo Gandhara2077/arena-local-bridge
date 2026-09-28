@@ -170,8 +170,9 @@ carries a state of `ok` or `suspected-dead`.
   trusted signal: there is no time-based decay and no health score.
 - `POST /api/pool/verify` (body: `{"sessionId": "<uuid>"}`) runs a manual check by driving **one real
   turn** with a unique nonce, then marking the session alive or suspected-dead. A page that merely
-  renders is not proof a session can still answer, and a *fixed* probe string would be served from
-  the bridge's idempotency cache without ever reaching Arena — hence the nonce.
+  renders is not proof a session can still answer, so the check has to really ask something; the
+  nonce keeps every run a distinct turn. (A finished turn is replayed only when the request carries
+  `x-arena-idempotency-key`, so identical text alone never short-circuits a new turn.)
   **This appends one short message to that session's transcript.** It is manual by design: no
   background polling, so nothing burns session lifetime on your behalf.
 - `POST /api/pool/reprobe` (body: `{"sessionId": "<uuid>"}`) re-runs model identification for one
