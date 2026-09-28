@@ -11,6 +11,20 @@ import { log } from "./util.mjs";
 
 const URL_RE = /https:\/\/[A-Za-z0-9._-]+\.trycloudflare\.com/;
 
+// The bearer token and the public endpoint are secrets: holding both is enough
+// to read and write this machine's workspace through the tunnel. Same 0o600 the
+// credential store already applies to credentials.json — see the note in
+// test/agentdock.test.mjs about what that does and does not buy on Windows.
+// Same three steps the credential store uses (write a .tmp, rename over the
+// target, then chmod): `mode` only applies to a file this call creates, so
+// writing straight to an existing target would leave it at its old permissions.
+export function writeSecretFile(file, data) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, data, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  fs.chmodSync(file, 0o600);
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -72,13 +86,22 @@ export class AgentDockManager {
     const file = path.join(this.dir, "auth-token.txt");
     try {
       const t = fs.readFileSync(file, "utf8").trim();
-      if (t) return t;
+      if (t) {
+        // An install that predates the 0o600 rule would keep its old permissions
+        // forever, because we only ever generate a token once.
+        try {
+          fs.chmodSync(file, 0o600);
+        } catch {
+          /* ignore */
+        }
+        return t;
+      }
     } catch {
       /* generate below */
     }
     const t = crypto.randomBytes(32).toString("hex");
     try {
-      fs.writeFileSync(file, t);
+      writeSecretFile(file, t);
     } catch {
       /* ignore */
     }
@@ -90,7 +113,7 @@ export class AgentDockManager {
     const targets = [path.join(this.dir, "mcp-endpoint.json"), this.endpointFile].filter(Boolean);
     for (const t of targets) {
       try {
-        fs.writeFileSync(t, payload);
+        writeSecretFile(t, payload);
       } catch {
         /* ignore */
       }
