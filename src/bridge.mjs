@@ -22,6 +22,52 @@ import { VERSION } from "./version.mjs";
 
 const encoder = new TextEncoder();
 
+// Assemble what actually goes into Arena, and derive the idempotency key from
+// the CALLER's logical request rather than from that finished text.
+//
+// Two things get added after the logical request is known — the local MCP
+// preamble (once per Session, §4.25) and a random end-of-turn marker (once per
+// request, §4.36). Keying off the finished text therefore gave a client retry a
+// different key than its first attempt, which is exactly the moment dedupe has
+// to fire: the key missed, the client's timeout resubmitted, and Arena ran the
+// turn twice.
+//
+// Kept as a pure function so that this invariant is testable — see
+// test/bridge.test.mjs. It lives here rather than in util.mjs because the Arena
+// prompt shapes are this module's business, not a shared helper.
+export function prepareTurnInput({ sessionId, prompt, preamble = "", marker = "" }) {
+  let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
+  if (marker) {
+    finalPrompt = `${finalPrompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
+  }
+  return {
+    key: `${sessionId}|${crypto.createHash("sha1").update(prompt).digest("hex")}`,
+    finalPrompt,
+  };
+}
+
+// The header a caller uses to say "this is the same request as before".
+export const IDEMPOTENCY_HEADER = "x-arena-idempotency-key";
+
+// Joining a run that is STILL GOING and replaying one that ALREADY FINISHED are
+// two different decisions, and they need two different keys.
+//
+// Joining is safe on `session + logical request`: if the identical request is
+// still running, handing back the same work is exactly what stops a client
+// timeout from turning into a second Arena turn.
+//
+// Replaying is not. Two identical prompts in a row may just be the caller asking
+// the same thing twice, and only the caller knows which it is. So a finished
+// result is replayed only when the request carries an explicit identity; with no
+// identity there is no replay key at all, and the second prompt starts a new
+// turn. Swallowing a legitimate second turn is worse than the rare duplicate
+// this used to prevent.
+export function completedReplayKey({ sessionId, prompt, idempotencyKey = "" }) {
+  const given = String(idempotencyKey || "").trim();
+  if (!given) return "";
+  return `${sessionId}|${crypto.createHash("sha1").update(`${given}\n${prompt}`).digest("hex")}`;
+}
+
 export class Bridge {
   constructor({ config, credentials, recaptcha, startedAt = Date.now() }) {
     this.config = config;
@@ -1104,7 +1150,6 @@ export class Bridge {
     // injection is one-shot, so a health check would spend it and the real
     // conversation would never be told about the workspace.
     const mcpLine = options.injectMcp === false ? "" : this.#mcpEndpointLine(sessionId, options.headers || null);
-    if (mcpLine) prompt = `${mcpLine}\n${prompt}`;
 
     // §4.36 — explicit end-of-turn marker (random per request). When the agent
     // echoes it we KNOW the turn is over, instead of inferring it from finish
@@ -1113,23 +1158,34 @@ export class Bridge {
     const marker = this.config.turnMarkerEnabled
       ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
       : "";
-    if (marker) {
-      prompt = `${prompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
-      log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
-    }
 
-    // §4.28 — a client-side TIMEOUT makes Codex RETRY the same request, which used
-    // to send a DUPLICATE question into the Arena session and queue a second 90s+
-    // run behind the first. Join identical in-flight calls onto one run instead.
-    const inflightKey = `${sessionId}|${crypto.createHash("sha1").update(prompt).digest("hex")}`;
+    // §4.33 — the dedupe key must describe the caller's LOGICAL request, so it is
+    // derived BEFORE the preamble and the marker are applied. See prepareTurnInput
+    // for what went wrong when it wasn't.
+    const { key: inflightKey, finalPrompt } = prepareTurnInput({
+      sessionId,
+      prompt,
+      preamble: mcpLine,
+      marker,
+    });
+    prompt = finalPrompt;
+    if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
+
     const existing = this.inflight.get(inflightKey);
     if (existing) {
       log.info("bridge", "converse: joining identical in-flight request (client retry)", { sessionId });
       return existing;
     }
     // §4.33 — a retry that arrives AFTER the first run already finished must not
-    // re-send the prompt into the Arena session.
-    const cached = this.resultCache.get(inflightKey);
+    // re-send the prompt into the Arena session. But only the caller can tell a
+    // retry apart from asking the same thing again, so a finished result is
+    // replayed only when the request names itself. See completedReplayKey.
+    const replayKey = completedReplayKey({
+      sessionId,
+      prompt,
+      idempotencyKey: String(options.headers?.[IDEMPOTENCY_HEADER] || options.idempotencyKey || ""),
+    });
+    const cached = replayKey ? this.resultCache.get(replayKey) : null;
     if (cached && cached.expiresAt > Date.now()) {
       log.info("bridge", "converse: served from idempotency cache (client retry)", { sessionId });
       return cached.payload;
@@ -1403,9 +1459,11 @@ export class Bridge {
     this.inflight.set(inflightKey, work);
     const cleanup = () => this.inflight.delete(inflightKey);
     work.then((payload) => {
-      // §4.33 — remember the result briefly so a later retry is idempotent.
-      if (this.config.resultCacheTtlMs > 0 && payload) {
-        this.resultCache.set(inflightKey, { payload, expiresAt: Date.now() + this.config.resultCacheTtlMs });
+      // §4.33 — remember the result briefly so a later retry of the SAME request is
+      // idempotent. No identity ⇒ nothing to remember and nothing to match, because
+      // the next identical prompt may well be a new turn. See completedReplayKey.
+      if (replayKey && this.config.resultCacheTtlMs > 0 && payload) {
+        this.resultCache.set(replayKey, { payload, expiresAt: Date.now() + this.config.resultCacheTtlMs });
         while (this.resultCache.size > 50) {
           const oldest = this.resultCache.keys().next().value;
           if (oldest === undefined) break;
