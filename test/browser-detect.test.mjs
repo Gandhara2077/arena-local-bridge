@@ -50,9 +50,41 @@ test("Playwright's cache is considered last, newest revision first", () => {
   const readdir = () => ["chromium-1148", "firefox-1", "chromium-1200"];
   const { tried } = detectBrowser({ ...onWindows, exists: nothing, readdir });
   const cache = tried.slice(5);
-  assert.equal(cache.length, 2, "non-chromium entries are ignored");
-  assert.ok(cache[0].includes("chromium-1200"));
-  assert.ok(cache[0].endsWith(path.join("chrome-win", "chrome.exe")));
+  assert.equal(cache.length, 4, "two chromium revisions, and both layouts of each");
+  assert.ok(cache[0].includes("chromium-1200"), "the newest revision comes first");
+  assert.ok(cache[0].endsWith(path.join("chrome-win64", "chrome.exe")), "in the layout a current Playwright writes");
+  assert.ok(cache[1].endsWith(path.join("chrome-win", "chrome.exe")), "then the one an earlier one left");
+  assert.ok(cache[2].includes("chromium-1148"));
+});
+
+// Playwright 1.63 no longer ships its own Chromium. Its EXECUTABLE_PATHS are
+// `chrome-linux64/chrome` and `chrome-mac-<arch>/Google Chrome for Testing.app/
+// Contents/MacOS/Google Chrome for Testing`, so looking only for
+// `chrome-linux/chrome` — what this did at first — misses a browser that came
+// from a current Playwright and reports "nothing installed" instead.
+test("Playwright's cache is looked at in the layouts a current version writes", () => {
+  const cacheOf = (platform, homeDir, ...layout) =>
+    path.join(homeDir, platform === "darwin" ? "Library/Caches" : ".cache", "ms-playwright", "chromium-1200", ...layout);
+
+  const modernLinux = cacheOf("linux", "/home/me", "chrome-linux64", "chrome");
+  assert.equal(
+    detectBrowser({ platform: "linux", env: {}, homeDir: "/home/me", readdir: () => ["chromium-1200"], exists: (p) => p === modernLinux }).path,
+    modernLinux
+  );
+
+  const modernMac = cacheOf("darwin", "/home/me", "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
+  assert.equal(
+    detectBrowser({ platform: "darwin", env: {}, homeDir: "/home/me", readdir: () => ["chromium-1200"], exists: (p) => p === modernMac }).path,
+    modernMac
+  );
+
+  // The older layout of the same revision is still looked at, so a browser an
+  // earlier Playwright downloaded is not declared missing either.
+  const legacyLinux = cacheOf("linux", "/home/me", "chrome-linux", "chrome");
+  assert.equal(
+    detectBrowser({ platform: "linux", env: {}, homeDir: "/home/me", readdir: () => ["chromium-1200"], exists: (p) => p === legacyLinux }).path,
+    legacyLinux
+  );
 });
 
 test("a Playwright browser is used when no installed one exists", () => {
@@ -91,16 +123,27 @@ test("on this Windows box, detection finds the browser that is actually installe
 // check's only job, so "no browser here" must never be its answer to one.
 test("isBrowserArtifact: a browser is recognised in every layout it is found in", () => {
   const artifacts = [
-    // the Playwright cache: chrome-win / chrome-linux / chrome-mac
+    // the Playwright cache, in the layouts it has written over time
     "/base/ms-playwright/chromium-1200/chrome-win/chrome.exe",
     "/home/me/.cache/ms-playwright/chromium-1200/chrome-linux/chrome",
     "/home/me/Library/Caches/ms-playwright/chromium-1200/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+    "/base/ms-playwright/chromium-1200/chrome-win64/chrome.exe",
+    "/home/me/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome",
+    "/home/me/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "/home/me/.cache/ms-playwright/chromium_headless_shell-1200/chrome-headless-shell-linux64/chrome-headless-shell",
     // PLAYWRIGHT_BROWSERS_PATH=0 — the same browser, with no `ms-playwright`
     "node_modules/playwright-core/.local-browsers/chromium-1200/chrome-linux/chrome",
-    // copied in by hand, or one of the system installs
+    // The cases that only the current rule catches: the modern names, with no
+    // revision directory above them. Every path above carries `chromium-1200`
+    // (or `ms-playwright`), which is what gave those away to the old
+    // `chrome.exe` / `headless_shell.exe` / `ms-playwright` rule — these do not.
+    "vendor/chrome-linux64/icudtl.dat",
+    "vendor/chrome-win64/icudtl.dat",
+    "vendor/chrome-headless-shell-linux64/icudtl.dat",
+    "vendor/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "vendor/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
     "vendor/Chromium.app/Contents/MacOS/Chromium",
     "vendor/chrome-linux/chrome",
-    "vendor/chrome-win64/chrome.exe",
     "vendor/headless_shell",
     // and the separators a Windows path arrives with
     "chromium-1200\\chrome-win\\chrome.exe",

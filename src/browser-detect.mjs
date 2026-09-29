@@ -15,6 +15,23 @@ import path from "node:path";
 // down — newest first, since an old revision is the one most likely to be
 // broken. Last in the order: a browser Playwright manages is the fallback, not
 // the first choice.
+//
+// Two layouts per revision, because Playwright moved from shipping its own
+// Chromium to Chrome for Testing. Read out of the playwright-core actually
+// installed here (1.63.0) — its EXECUTABLE_PATHS is:
+//
+//   linux-x64    ["chrome-linux64", "chrome"]
+//   linux-arm64  ["chrome-linux-arm64", "chrome"]
+//   mac-x64      ["chrome-mac-x64", "Google Chrome for Testing.app",
+//                 "Contents", "MacOS", "Google Chrome for Testing"]
+//   mac-arm64    ["chrome-mac-arm64", …same…]
+//   win-x64      ["chrome-win64", "chrome.exe"]
+//
+// The second entry of each pair is the older layout — `chrome-linux`,
+// `chrome-mac/Chromium.app`, `chrome-win` — which is what the same revision
+// directory holds when an earlier Playwright downloaded it. Both are listed and
+// `exists` decides; only one of them is ever there. macOS gets both
+// architectures for the same reason.
 function playwrightCache({ platform, env, homeDir, readdir }) {
   const root =
     platform === "win32"
@@ -22,18 +39,29 @@ function playwrightCache({ platform, env, homeDir, readdir }) {
       : platform === "darwin"
         ? path.join(homeDir, "Library", "Caches", "ms-playwright")
         : path.join(homeDir, ".cache", "ms-playwright");
-  const exe =
+  const layouts =
     platform === "win32"
-      ? ["chrome-win", "chrome.exe"]
+      ? [
+          ["chrome-win64", "chrome.exe"],
+          ["chrome-win", "chrome.exe"],
+        ]
       : platform === "darwin"
-        ? ["chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"]
-        : ["chrome-linux", "chrome"];
+        ? [
+            ["chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
+            ["chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
+            ["chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"],
+          ]
+        : [
+            ["chrome-linux64", "chrome"],
+            ["chrome-linux-arm64", "chrome"],
+            ["chrome-linux", "chrome"],
+          ];
   try {
     return readdir(root)
       .filter((name) => /^chromium(-\d+)?$/.test(String(name)))
       .sort()
       .reverse()
-      .map((dir) => path.join(root, dir, ...exe));
+      .flatMap((dir) => layouts.map((layout) => path.join(root, dir, ...layout)));
   } catch {
     return [];
   }
@@ -99,13 +127,18 @@ export function detectBrowser({
 // `node_modules/playwright-core/.local-browsers/`, where a browser installed
 // with PLAYWRIGHT_BROWSERS_PATH=0 lives. So the match is on path segments,
 // either separator, over the same layouts the detection above knows about.
-const BROWSER_BINARY = /^(chrome|chromium|msedge|chrome-headless-shell|headless_shell)(\.exe)?$/i;
+const BROWSER_BINARY = /^(chrome|chromium|msedge|chrome-headless-shell|headless_shell|google chrome for testing)(\.exe)?$/i;
 // Directories a browser install creates — never a file name, and never a bare
 // `chrome` / `chromium`: playwright-core has `lib/server/chromium/` of its own,
 // which a segment-wide match on the binary names above turns into a false
 // refusal. What decides a browser install is the revision-numbered directory
-// Playwright writes, or the layout directory inside it.
-const BROWSER_DIRECTORY = /^(ms-playwright|\.local-browsers|chrome-(win|win64|linux|linux64|mac)|chromium([-_]?headless[_-]shell)?-\d+|(chromium|google chrome)\.app)$/i;
+// Playwright writes, or the layout directory inside it — including the
+// `chrome-linux64` / `chrome-win64` / `chrome-mac-<arch>` + "Google Chrome for
+// Testing.app" names Playwright uses since it moved off its own Chromium, and
+// the older `chrome-linux` / `chrome-win` / `chrome-mac` + `Chromium.app` ones
+// it still leaves on disk for earlier revisions.
+const BROWSER_DIRECTORY =
+  /^(ms-playwright|\.local-browsers|chrome-(win|win64|linux|linux64|linux-arm64|mac|mac-x64|mac-arm64)|chrome-headless-shell-[a-z0-9-]+|chromium([-_]?headless[_-]shell)?-\d+|(chromium|google chrome|google chrome for testing)\.app)$/i;
 
 /**
  * Is this path part of a browser install — something the portable archive must
