@@ -97,6 +97,11 @@ export function loadConfig(env = {}, { requireBridgeKey = true } = {}) {
     // relative paths resolve to ~/AgentDock, which is not the user's project.
     // Unset => the preamble simply omits the workspace line.
     mcpWorkspace: String(env.ARENA_MCP_WORKSPACE || "").trim(),
+    // ADR 0008 — skill roots the user EXPLICITLY listed (path.delimiter-
+    // separated absolute directories, e.g. ARENA_SKILL_ROOTS="C:\a;C:\b").
+    // They become read-only roots next to the workspace; anything unlisted
+    // stays outside the boundary, so the home is never opened wholesale.
+    skillRoots: parseRootList(env.ARENA_SKILL_ROOTS, "ARENA_SKILL_ROOTS"),
     // Codex writes one transcript per conversation under here, carrying both the
     // session id (which Codex sends as x-codex-session-id) and the working
     // directory it ran in — enough to recover a conversation's workspace with no
@@ -129,6 +134,22 @@ function detectAgentdockDir() {
     /* ignore */
   }
   return "";
+}
+
+function parseRootList(raw, label) {
+  return String(raw || "")
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      // decidePath resolves every root against the process cwd; letting a
+      // relative path through would silently grant a directory that depends
+      // on where the bridge was started from. Fail fast at the config gate.
+      if (!path.isAbsolute(part)) {
+        throw new Error(`${label} entries must be absolute paths: ${part}`);
+      }
+      return part;
+    });
 }
 
 function loadProfile(profileFile) {

@@ -99,3 +99,54 @@ export function decidePath(
   }
   return deny("path is outside the workspace and every granted root");
 }
+
+/**
+ * The roots object every decidePath consumer receives, assembled in one place:
+ * the workspace stays read-write, the config's EXPLICIT skill roots become
+ * read-only roots (ADR 0008 — only listed directories are opened, never the
+ * home wholesale), and the data directory lands in privateRoots so it stays
+ * denied even when a workspace or skill root would otherwise cover it —
+ * decidePath checks privateRoots first.
+ *
+ * A skill root may NOT overlap the workspace in either direction. That is a
+ * configuration error, not a precedence question: decidePath checks
+ * workspaceRoots before readOnlyRoots, so an overlap would silently make the
+ * "read-only" root writable and "skill roots are read-only" would be a lie.
+ * Fail fast here instead.
+ *
+ * The `resolve` hook is the same contract decidePath takes
+ * (fs.realpathSync.native in production): overlap is judged on REAL paths, so
+ * a skill root that is a symlink or junction into the workspace cannot slip
+ * past the lexical comparison and end up writable as part of the workspace.
+ * A root that is not on disk yet cannot be resolved — fall back to its lexical
+ * path, exactly as decidePath's rootsOf does.
+ */
+export function buildRoots(
+  { skillRoots = [], dataDir = "" } = {},
+  workspaceRoots = [],
+  { resolve = (p) => p } = {},
+) {
+  const realRoot = (root) => {
+    try {
+      return resolve(path.resolve(root));
+    } catch {
+      return path.resolve(root);
+    }
+  };
+  for (const skill of skillRoots) {
+    for (const ws of workspaceRoots) {
+      const skillReal = realRoot(skill);
+      const wsReal = realRoot(ws);
+      if (within(skillReal, wsReal) || within(wsReal, skillReal)) {
+        throw new Error(
+          `skill root ${skill} overlaps workspace ${ws}: skill roots are read-only and must not intersect the workspace`,
+        );
+      }
+    }
+  }
+  return {
+    workspaceRoots: [...workspaceRoots],
+    readOnlyRoots: [...skillRoots],
+    privateRoots: dataDir ? [dataDir] : [],
+  };
+}
