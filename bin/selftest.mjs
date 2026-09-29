@@ -34,7 +34,7 @@ async function main() {
   const bridge = new Bridge({ config, credentials, recaptcha: null });
   await bridge.start();
   try {
-    const page = await bridge.browser.getPage(account);
+    const page = await bridge.browser.getPage(account, "converse");
     // tiny probe session
     const state = await bridge.createAgentSession(
       page,

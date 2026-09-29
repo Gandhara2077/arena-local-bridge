@@ -27,7 +27,7 @@ try {
 
 const browser = new ArenaBrowser({ omniRoot: config.omniRoot, chromePath: config.chromePath, proxy: config.proxy });
 try {
-  const page = await browser.getPage(credential);
+  const page = await browser.getPage(credential, "converse");
   await page.goto(`https://arena.ai/agent/${targetId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForTimeout(5_000);
   // dismiss cookies if present

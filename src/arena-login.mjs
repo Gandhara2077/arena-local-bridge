@@ -44,6 +44,56 @@ export function contextAction({ hasContext = false, dirty = false, leases = 0 } 
   return leases === 0 ? "rebuild" : "reuse-stale";
 }
 
+/**
+ * The operations that hold a page of their own.
+ *
+ * A lease protects the CONTEXT's lifetime, not a page's use: two operations can
+ * hold the same Account at once and each still needs its own page, or one
+ * navigating away makes the other read the wrong document. Keyed on purpose
+ * rather than on operation instance, because a page has to outlive the call
+ * that made it — a turn asks for its page repeatedly, and the quota read is
+ * written against the page a finished turn left behind. Concurrent operations
+ * of the SAME purpose are already serialized upstream (#serialized for
+ * converse, `running` for the harvester, turnsInFlight for reprobe).
+ */
+export const PAGE_PURPOSES = {
+  converse: { probe: true },
+  harvest: { probe: true },
+  reprobe: { probe: true },
+  // Loads Google's script and nothing else. No conversation ever runs on it, so
+  // the probe would only be re-parsed on every navigation for a snapshot that
+  // nobody reads.
+  recaptcha: { probe: false },
+};
+
+/**
+ * An unknown purpose is a mistake, not a purpose of its own: it would quietly
+ * make a fresh page on every call, and anything written against the page a
+ * previous run left behind would find an empty document instead of the typo.
+ * A missing one is rejected the same way — silently landing on someone else's
+ * page is the whole failure this indirection exists to prevent.
+ */
+function assertPagePurpose(purpose) {
+  if (!Object.hasOwn(PAGE_PURPOSES, String(purpose ?? ""))) {
+    throw new TypeError(
+      `Unknown page purpose ${JSON.stringify(purpose)}; expected one of ${Object.keys(PAGE_PURPOSES).join(", ")}`
+    );
+  }
+}
+
+/**
+ * What should happen to this purpose's page on the way into getPage()?
+ *
+ *   reuse  — it already has an open page
+ *   create — it has none, or the one it had is closed
+ *
+ * The closed case is the one worth a name: a page the site closed is not a
+ * page, and reusing it fails at the first call on it — far from the decision.
+ */
+export function pageAction({ hasPage = false, closed = false } = {}) {
+  return hasPage && !closed ? "reuse" : "create";
+}
+
 export class ArenaBrowser {
   constructor({ omniRoot = "", chromePath = "", proxy = "", userAgent } = {}) {
     this.pw = resolvePlaywright(omniRoot);
@@ -58,7 +108,7 @@ export class ArenaBrowser {
     // One context per Account, keyed by email. A single shared context meant a
     // refresh for one Account rebuilt the world for all of them, and that the
     // batch/reprobe/quota flows all queued behind the same pages.
-    //   { context, page, recaptchaPage, signature, dirty, leases, warned }
+    //   { context, pages, signature, staleSince, leases, warned }
     this.contexts = new Map();
     // Pages already carrying the model probe. addInitScript is per-page, and
     // re-adding it on every call would make each navigation parse the bundle
@@ -95,8 +145,11 @@ export class ArenaBrowser {
     if (!entry) {
       entry = {
         context: null,
-        page: null,
-        recaptchaPage: null,
+        // One page per purpose, and a new Map whenever the context is replaced:
+        // a page from the old context is dead the moment that context closes,
+        // so keeping them together is what makes "never hand out a dead page"
+        // structural instead of something to remember to clear.
+        pages: new Map(),
         signature: "",
         staleSince: 0,
         warned: false,
@@ -139,9 +192,12 @@ export class ArenaBrowser {
   }
 
   /**
-   * A page for `credential`'s Account. No lease is taken here — see withAccount().
+   * A page for `credential`'s Account, for one operation's purpose. No lease is
+   * taken here — see withAccount(). `purpose` is required: it is what keeps two
+   * operations on one Account off each other's page, so it is not something a
+   * call site should be able to leave to a default.
    */
-  async getPage(credential = null) {
+  async getPage(credential = null, purpose) {
     // A bare cookie header is the shape of a call site left on the old
     // (cookieHeader, updatedAt) signature — and every field this method reads
     // would come back undefined, so it would quietly drive an ANONYMOUS,
@@ -159,6 +215,9 @@ export class ArenaBrowser {
     const account = String(credential?.email || "");
     const cookieHeader = String(credential?.cookieHeader || "");
     const signature = String(credential?.updatedAt || "");
+    // Validated here, before anything is built: a typo must not leave a
+    // half-created Account behind it.
+    assertPagePurpose(purpose);
     const entry = this.#entry(account);
 
     // A credential that changed means this Account's cookies are stale — but
@@ -182,7 +241,9 @@ export class ArenaBrowser {
     }
     if (action === "create" || action === "rebuild") {
       await entry.context?.close().catch(() => undefined);
-      entry.recaptchaPage = null;
+      // The old context took its pages with it, so this is a fresh Map rather
+      // than a cleanup pass — a stale entry here could only ever be a dead page.
+      entry.pages = new Map();
       const contextOpts = {
         viewport: { width: 1440, height: 900 },
         locale: process.env.ARENA_LOCALE || "zh-CN",
@@ -225,28 +286,33 @@ export class ArenaBrowser {
         }
       });
       if (cookieHeader) await entry.context.addCookies(cookieHeaderToObjects(cookieHeader));
-      entry.page = await entry.context.newPage();
       entry.signature = signature;
       entry.staleSince = 0;
       entry.warned = false;
       if (action === "rebuild") log.info("browser", "context rebuilt for a refreshed credential", { account });
     }
-    if (!entry.page || entry.page.isClosed()) entry.page = await entry.context.newPage();
-    // Every page this bridge drives carries the probe. A conversation run on it
-    // then leaves a trace behind, and the trace's cost spans are where the USD
-    // quota reading comes from — so the probe has to be registered BEFORE the
-    // navigation that carries the turn, which is why it happens here rather
-    // than at each call site.
-    if (!this.probedPages.has(entry.page)) {
-      this.probedPages.add(entry.page);
-      const installed = await installProbe(entry.page);
+
+    const held = entry.pages.get(purpose);
+    if (pageAction({ hasPage: Boolean(held), closed: Boolean(held?.isClosed?.()) }) === "create") {
+      entry.pages.set(purpose, await entry.context.newPage());
+    }
+    const page = entry.pages.get(purpose);
+    // Every page that carries a conversation gets the probe: a run on it leaves
+    // a trace behind, and the trace's cost spans are where the USD quota reading
+    // comes from — so it has to be registered BEFORE the navigation that carries
+    // the turn, which is why it happens here rather than at any call site.
+    // Whether a purpose carries one is part of PAGE_PURPOSES, so a new purpose
+    // has to say so rather than inheriting an answer.
+    if (PAGE_PURPOSES[purpose].probe && !this.probedPages.has(page)) {
+      this.probedPages.add(page);
+      const installed = await installProbe(page);
       this.probeAvailable = installed.ok;
       if (!installed.ok) {
-        this.probedPages.delete(entry.page); // let a later call retry
+        this.probedPages.delete(page); // let a later call retry
         log.warn("browser", "probe not installed", { error: installed.error });
       }
     }
-    return entry.page;
+    return page;
   }
 
   /**
@@ -264,7 +330,11 @@ export class ArenaBrowser {
       if (!entry.context) continue;
       accounts.push({
         account,
-        pageReady: Boolean(entry.page && !entry.page.isClosed()),
+        // Which purposes are holding an open page, so a page that died without
+        // being noticed shows up here rather than as an empty reading.
+        pages: [...entry.pages]
+          .filter(([, page]) => !page.isClosed())
+          .map(([purpose]) => purpose),
         leases: entry.leases,
         staleSince: entry.staleSince || null,
       });
@@ -277,8 +347,7 @@ export class ArenaBrowser {
     for (const entry of this.contexts.values()) {
       await entry.context?.close().catch(() => undefined);
       entry.context = null;
-      entry.page = null;
-      entry.recaptchaPage = null;
+      entry.pages = new Map();
       entry.leases = 0;
     }
     this.contexts.clear();
@@ -372,17 +441,16 @@ export class ArenaBrowser {
    * signature against a stored one, so it rebuilt the context on every token.
    */
   async freshRecaptchaToken(credential, siteKey) {
-    const account = String(credential?.email || "");
     // Minting a token means navigating and then waiting up to 30s for Google's
     // script, so it holds the context like any other operation. Releasing without
     // this acquire would have decremented some other operation's lease and let a
     // refresh rebuild the context underneath it.
     return this.withAccount(credential, async () => {
-      await this.getPage(credential);
-      const entry = this.#entry(account);
-      let target = entry.recaptchaPage;
-      if (!target || target.isClosed()) target = await entry.context.newPage();
-      entry.recaptchaPage = target;
+      // Its own page, deliberately kept for as long as the context lives: it
+      // holds Google's loaded script, and re-fetching that per token would be
+      // slower and look less like a browser. It is not shared with any other
+      // purpose, so the navigation below cannot disturb a running turn.
+      const target = await this.getPage(credential, "recaptcha");
       if (!target.url().startsWith("https://arena.ai/")) {
         await target.goto("https://arena.ai/", { waitUntil: "domcontentloaded", timeout: 45_000 });
       }
