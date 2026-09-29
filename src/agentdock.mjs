@@ -339,11 +339,17 @@ export class AgentDockManager {
     this.tunnel.on("error", (e) => {
       this.lastError = String(e?.message || e);
     });
-    // Measured on Windows/Node 22: piped stdio does not hold this process open
-    // once the child is unref'd, so natural exit still works as it did with a
-    // file descriptor.
+    // The Node docs are explicit: a child's piped stdio is referenced by this
+    // process's event loop, and `child.unref()` alone does not lift that — the
+    // pipe handles themselves must be unref'd as well. Otherwise a bridge that
+    // wants to exit naturally (tests, graceful shutdown) can be held open by a
+    // detached tunnel that outlives it. Unref'd pipes still deliver `data`
+    // while the loop runs for other reasons (the HTTP server), so masking and
+    // URL discovery are unaffected — see test/agentdock-lifecycle.test.mjs.
     tunnelLog.pump(this.tunnel.stdout);
     tunnelLog.pump(this.tunnel.stderr);
+    this.tunnel.stdout.unref?.();
+    this.tunnel.stderr.unref?.();
     this.tunnel.unref?.();
 
     for (let i = 0; i < 60 && !url; i++) await sleep(1000);
@@ -374,6 +380,8 @@ export class AgentDockManager {
     });
     serviceLog.pump(this.service.stdout);
     serviceLog.pump(this.service.stderr);
+    this.service.stdout.unref?.();
+    this.service.stderr.unref?.();
     this.service.unref?.();
 
     this.url = url;
