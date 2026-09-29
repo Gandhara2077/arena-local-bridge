@@ -214,13 +214,15 @@ header: Authorization: Bearer <token>
 本地工作区: <your workspace>
 约定:
 1) 读写本地文件一律走 MCP 工具（read_file / list_dir / search_text / file_edit / exec_command）。
-2) MCP 的相对路径解析到 ~/AgentDock，不是工作区——要落到工作区请传绝对路径。
+2) 一律传绝对路径：相对路径不会落到工作区（自建 MCP 直接拒绝；旧 AgentDock 会解析到 ~/AgentDock）。
 3) 你生成的文件必须写回本地（file_edit action=add 或 replace），不要只在回复里贴内容。
 4) 需要交付给人的产物用 file_publish 发布成 artifact。
 ```
 
-**Why rule 2 is there:** AgentDock resolves relative paths against `~/AgentDock`, which is *not* your
-project. An agent that writes `report.md` with a relative path puts it somewhere you will never look.
+**Why rule 2 is there:** relative paths never land in the workspace. Today's AgentDock upstream
+resolves them against `~/AgentDock`, which is *not* your project; our own MCP server (the
+upstream-replacement work) rejects them outright. Either way, an agent that writes `report.md`
+with a relative path fails to deliver — so the preamble just says "absolute paths, always".
 Rule 3 exists because an agent that only pastes generated content into its reply has not delivered a file.
 
 **Where the workspace comes from**, highest priority first:
@@ -254,8 +256,8 @@ the `x-*` headers that actually arrived. When using a proxy or gateway, make sur
 request headers required by your client integration.
 
 Only **absolute** paths are accepted from the header (drive letter, UNC, or POSIX). A relative path is
-ignored rather than forwarded, because AgentDock would resolve it against `~/AgentDock` — the exact
-mistake the line exists to prevent.
+ignored rather than forwarded, because relative paths never land in the workspace — AgentDock would
+resolve them against `~/AgentDock`, and our own MCP server rejects them outright.
 
 The header is read on the turn that injects the preamble, so a client that sends it on every request
 needs no extra care. Internal probes (`体检`) do **not** consume the one-shot preamble.

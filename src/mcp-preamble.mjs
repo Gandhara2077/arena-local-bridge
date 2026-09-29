@@ -38,9 +38,10 @@ export function mcpPreamble({ url, token, workspace = "" }) {
   lines.push(
     "约定:",
     "1) 读写本地文件走上面的端点，不是你的沙箱。",
-    "2) 相对路径会解析到 ~/AgentDock，不是工作区——要落到工作区请传绝对路径。",
+    "2) 一律传绝对路径：相对路径不会落到工作区（自建 MCP 直接拒绝；旧 AgentDock 会解析到 ~/AgentDock）。",
     "3) 你生成的文件必须写回本地（file_edit action=add 或 replace），不要只在回复里贴内容。",
-    "4) 需要交付给人的产物用 file_publish 发布成 artifact。"
+    "4) 需要交付给人的产物用 file_publish 发布成 artifact。",
+    "5) exec_command 以本地用户完整权限运行，不受上述文件边界限制；越过工作区或破坏性操作前先问用户。"
   );
   return lines.join("\n");
 }

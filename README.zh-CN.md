@@ -184,12 +184,15 @@ header: Authorization: Bearer <token>
 本地工作区: <your workspace>
 约定:
 1) 读写本地文件一律走 MCP 工具（read_file / list_dir / search_text / file_edit / exec_command）。
-2) MCP 的相对路径解析到 ~/AgentDock，不是工作区——要落到工作区请传绝对路径。
+2) 一律传绝对路径：相对路径不会落到工作区（自建 MCP 直接拒绝；旧 AgentDock 会解析到 ~/AgentDock）。
 3) 你生成的文件必须写回本地（file_edit action=add 或 replace），不要只在回复里贴内容。
 4) 需要交付给人的产物用 file_publish 发布成 artifact。
 ~~~
 
-**为什么有第 2 条：** AgentDock 会把相对路径解析到 ~/AgentDock，而不是你的项目。Agent 如果使用相对路径写入 report.md，文件就可能出现在你不会查看的位置。第 3 条存在的原因是：如果 Agent 只把生成内容贴在回复中，就不能算真正交付了文件。
+**为什么有第 2 条：** 相对路径永远不会落到工作区。当前的 AgentDock 上游会把相对路径解析到
+`~/AgentDock`（不是你的项目）；我们自建的 MCP 服务器（上游替换工作）则直接拒绝相对路径。
+两者结果一致：用相对路径写 `report.md` 都交付不到工作区，所以 preamble 只说一句「一律传绝对路径」。
+第 3 条存在的原因是：如果 Agent 只把生成内容贴在回复中，就不能算真正交付了文件。
 
 **工作区的来源**按以下优先级排列：
 
@@ -204,7 +207,9 @@ header: Authorization: Bearer <token>
 
 需要注意的是，本地客户端与 Bridge 之间的代理可能会完全丢弃自定义 Header。如果配置的 Header 始终没有出现，请检查 Bridge 的 workspace hints 日志行，其中会报告实际收到的 x-* Header。使用代理或 Gateway 时，请确保它保留客户端集成所需的 Request Header。
 
-Header 只接受**绝对路径**（盘符路径、UNC 或 POSIX 路径）。相对路径会被忽略而不会继续转发，因为 AgentDock 会将其解析到 ~/AgentDock——这正是上述规则要避免的问题。
+Header 只接受**绝对路径**（盘符路径、UNC 或 POSIX 路径）。相对路径会被忽略而不会继续转发，
+因为相对路径永远不会落到工作区——AgentDock 会将其解析到 `~/AgentDock`，我们自建的 MCP 服务器
+则直接拒绝。
 
 Header 会在注入 preamble 的那个 turn 中读取，因此客户端如果每次请求都发送它，不需要额外处理。内部探针（体检）**不会**消耗一次性的 preamble。
 
