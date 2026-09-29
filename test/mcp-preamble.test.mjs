@@ -17,8 +17,14 @@ test("the workspace line appears only when a workspace is configured", () => {
   assert.ok(!mcpPreamble({ url: URL, token: TOKEN, workspace: "   " }).includes("本地工作区"));
 });
 
-test("it tells the agent that relative paths do not land in the workspace", () => {
-  assert.match(mcpPreamble({ url: URL, token: TOKEN }), /相对路径(会)?解析到 ~\/AgentDock/);
+test("it tells the agent that relative paths never land in the workspace", () => {
+  // Neutral phrasing on purpose: the upstream is AgentDock today (relative
+  // paths resolve to ~/AgentDock) and our own server after ticket 18/19
+  // (relative paths are rejected outright) — both mean "not the workspace".
+  const text = mcpPreamble({ url: URL, token: TOKEN });
+  assert.match(text, /一律传绝对路径/);
+  assert.match(text, /不会落到工作区/);
+  assert.ok(!/请传绝对路径/.test(text), "the old ~/AgentDock-only phrasing must be gone");
 });
 
 test("it requires generated files to be written back, not pasted into the reply", () => {
@@ -29,6 +35,13 @@ test("it requires generated files to be written back, not pasted into the reply"
 
 test("it names the publish tool for deliverables", () => {
   assert.match(mcpPreamble({ url: URL, token: TOKEN }), /file_publish/);
+});
+
+test("it discloses that exec_command is a local shell outside the file boundary (ADR 0011)", () => {
+  const text = mcpPreamble({ url: URL, token: TOKEN });
+  assert.match(text, /完整权限/);
+  assert.match(text, /不受上述文件边界限制/);
+  assert.match(text, /先问用户/);
 });
 
 test("it says the tools are reached over HTTP, not from the agent's own tool list", () => {
