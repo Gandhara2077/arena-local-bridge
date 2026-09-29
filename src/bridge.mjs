@@ -1497,22 +1497,38 @@ export class Bridge {
    *
    * Never touches another account: each Account owns its context, so reading one
    * Account's quota cannot disturb another Account's turn.
+   *
+   * Ticket 10, option A: the busy check and the queue slot are ONE synchronous
+   * step. The check reads the same counters #serialized maintains; when it
+   * passes, #serialized enqueues in the same tick — so a turn starting after
+   * the check queues BEHIND the read (which is fast) instead of racing it onto
+   * the same converse page, and a turn already running or queued makes this
+   * reject immediately. Rejecting — not queueing — is deliberate: a queued
+   * quota read would hang the GUI behind a multi-minute turn.
    */
   async quotaSnapshot() {
+    if (this.runtime.activeRequests > 0 || this.runtime.queueDepth > 0) {
+      throw Object.assign(
+        new Error("A turn is in flight; retry when it finishes."),
+        { status: 409, code: "busy" }
+      );
+    }
     const account = this.#credential();
-    return this.browser.withAccount(account, async () => {
-      const page = await this.#page(account, "converse");
-      const snap = await readSnapshot(page, { waitForModel: false });
-      return {
-        email: account.email,
-        percent: snap.percent,
-        percentSource: snap.percentSource,
-        usd: snap.usd,
-        usdStatus: snap.usdStatus,
-        error: snap.error,
-        checkedAt: new Date().toISOString(),
-      };
-    });
+    return this.#serialized(() =>
+      this.browser.withAccount(account, async () => {
+        const page = await this.#page(account, "converse");
+        const snap = await readSnapshot(page, { waitForModel: false });
+        return {
+          email: account.email,
+          percent: snap.percent,
+          percentSource: snap.percentSource,
+          usd: snap.usd,
+          usdStatus: snap.usdStatus,
+          error: snap.error,
+          checkedAt: new Date().toISOString(),
+        };
+      })
+    );
   }
 
   healthPayload() {

@@ -566,7 +566,14 @@ export function createServer({ bridge, config }) {
           error: error instanceof Error ? error.message : String(error),
           stack: error instanceof Error ? String(error.stack).split("\n").slice(0, 5).join(" | ") : null,
         });
-        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+        // The bridge's own gate (ticket 10) rejects with status 409 when a turn
+        // holds the serialized queue — surface that shape instead of 500.
+        return json(res, Number(error.status || 500), {
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+            ...(error?.code ? { code: error.code } : {}),
+          },
+        });
       }
     }
 
