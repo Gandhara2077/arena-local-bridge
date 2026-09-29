@@ -9,7 +9,80 @@ import { spawn, execFile } from "node:child_process";
 import crypto from "node:crypto";
 import { log, maskTunnelUrl } from "./util.mjs";
 
-const URL_RE = /https:\/\/[A-Za-z0-9._-]+\.trycloudflare\.com/;
+// One regex, used only through `match` and `replace` — both of which reset
+// `lastIndex`, so the `/g` cannot drift between calls. `.test` / `.exec` would
+// be stateful here; there are none.
+const URL_RE = /https:\/\/[A-Za-z0-9._-]+\.trycloudflare\.com/g;
+
+// cloudflared prints the public URL into its own log file, and that URL is a
+// credential — the same one #04 keeps out of OUR log lines. The children's
+// output pipes are the last point where those bytes are still ours, so both
+// logs are written by us from a filtered stream. Redacting them afterwards is
+// not an option: the child holds its file open (Windows will not let us delete
+// it) and a retry prints a fresh URL, so a one-shot truncate leaves a hole.
+//
+// Lines, not chunks. A read boundary can land inside the URL, and deciding per
+// chunk would both write the two halves out unmasked AND fail to recognise the
+// URL at all — the URL discovery reads these same lines.
+function createLineSplitter(onLine) {
+  let carry = "";
+  return {
+    push(chunk) {
+      const text = carry + String(chunk ?? "");
+      let start = 0;
+      for (let end = text.indexOf("\n"); end >= 0; end = text.indexOf("\n", start)) {
+        onLine(text.slice(start, end + 1));
+        start = end + 1;
+      }
+      carry = text.slice(start);
+    },
+    flush() {
+      const rest = carry;
+      carry = "";
+      if (rest) onLine(rest);
+    },
+  };
+}
+
+function mask(text) {
+  return text.replace(URL_RE, (url) => maskTunnelUrl(url));
+}
+
+// A log file whose every line is masked on the way out. `onLine` sees the line
+// RAW — that is how the tunnel's URL is still found — so the callback may look
+// at it, never write it anywhere. Same job shape as writeSecretFile above: keep
+// the bytes that matter out of reach.
+export function openMaskedLog(file, onLine = () => {}) {
+  const stream = fs.createWriteStream(file, { flags: "a" });
+  // A log we cannot write must not take the process down with it: the raw-fd
+  // version this replaces swallowed these errors too.
+  stream.on("error", () => {});
+  const splitters = [];
+  return {
+    // One splitter per source. stdout and stderr arrive independently, and a
+    // shared buffer would glue half of one line onto half of another.
+    pump(source) {
+      const splitter = createLineSplitter((line) => {
+        onLine(line);
+        stream.write(mask(line));
+      });
+      splitters.push(splitter);
+      source.setEncoding("utf8");
+      source.on("data", (chunk) => splitter.push(chunk));
+    },
+    // Resolves once the bytes are actually on disk, so a caller can wait for it.
+    // A stream that already failed will never emit `close` again — waiting on
+    // that would hang `stop()` for good, hence the check.
+    close() {
+      for (const splitter of splitters) splitter.flush();
+      if (stream.closed || stream.destroyed) return Promise.resolve();
+      return new Promise((resolve) => {
+        stream.once("close", resolve);
+        stream.end();
+      });
+    },
+  };
+}
 
 // The bearer token and the public endpoint are secrets: holding both is enough
 // to read and write this machine's workspace through the tunnel. Same 0o600 the
@@ -109,6 +182,7 @@ export class AgentDockManager {
     this.endpointFile = String(endpointFile || "").trim();
     this.tunnel = null;
     this.service = null;
+    this.logSinks = [];
     this.url = "";
     this.lastError = "";
   }
@@ -127,10 +201,13 @@ export class AgentDockManager {
   }
 
   get logPaths() {
+    // One file per child, both streams in it. `legacyTunnelErr` is not written
+    // any more — it is listed so a copy left by an older version, which has the
+    // unmasked URL in it, is cleared on the next start like the others.
     return {
       tunnel: path.join(this.dir, "tunnel.log"),
-      tunnelErr: path.join(this.dir, "tunnel.err.log"),
       run: path.join(this.dir, "run-public.log"),
+      legacyTunnelErr: path.join(this.dir, "tunnel.err.log"),
     };
   }
 
@@ -224,42 +301,52 @@ export class AgentDockManager {
 
     const { agentdock, cloudflared } = this.exe;
     const logs = this.logPaths;
-    for (const p of [logs.tunnel, logs.tunnelErr]) {
+    // Per run, not appended across runs: anything an older version left behind
+    // has the unmasked URL in it, and a file that grows forever is not worth
+    // keeping either.
+    for (const file of [logs.tunnel, logs.run, logs.legacyTunnelErr]) {
       try {
-        fs.rmSync(p, { force: true });
+        fs.rmSync(file, { force: true });
       } catch {
         /* ignore */
       }
     }
-    const outFd = fs.openSync(logs.tunnel, "a");
+
+    // Both child logs go to disk through us, so the public URL is masked on the
+    // way out — the acceptance is about what ends up on disk, and both children
+    // are handed that URL (one prints it, one gets it as an env var). This is
+    // also where the URL is READ from: the line the callback sees is still raw,
+    // and only the copy written to the file is masked.
+    //
+    // The trade: the tunnel still outlives this process (detached), but its log
+    // no longer does. Nothing reads the file after we are gone, and the next
+    // start clears it — worst case it stops growing.
+    let url = "";
+    const tunnelLog = openMaskedLog(logs.tunnel, (line) => {
+      if (url) return;
+      const found = line.match(URL_RE);
+      if (found) url = found[0];
+    });
+    this.logSinks = [tunnelLog];
 
     // 1) tunnel FIRST — we need its public URL before AgentDock can boot
     //    (AGENTDOCK_SERVER_URL is required or MCP rejects tunnel calls with 403).
     this.tunnel = spawn(
       cloudflared,
       ["tunnel", "--url", "http://127.0.0.1:8765", "--no-autoupdate", "--protocol", "http2"],
-      { detached: true, stdio: ["ignore", outFd, outFd] }
+      { detached: true, stdio: ["ignore", "pipe", "pipe"] }
     );
     this.tunnel.on("error", (e) => {
       this.lastError = String(e?.message || e);
     });
+    // Measured on Windows/Node 22: piped stdio does not hold this process open
+    // once the child is unref'd, so natural exit still works as it did with a
+    // file descriptor.
+    tunnelLog.pump(this.tunnel.stdout);
+    tunnelLog.pump(this.tunnel.stderr);
     this.tunnel.unref?.();
 
-    let url = "";
-    for (let i = 0; i < 60 && !url; i++) {
-      await sleep(1000);
-      for (const p of [logs.tunnel, logs.tunnelErr]) {
-        try {
-          const m = fs.readFileSync(p, "utf8").match(URL_RE);
-          if (m) {
-            url = m[0];
-            break;
-          }
-        } catch {
-          /* not created yet */
-        }
-      }
-    }
+    for (let i = 0; i < 60 && !url; i++) await sleep(1000);
     if (!url) {
       await this.stop();
       const msg = "cloudflared did not report a public URL within 60s (see tunnel.log)";
@@ -269,10 +356,11 @@ export class AgentDockManager {
 
     // 2) AgentDock bound to localhost, with the public URL declared
     const token = this.#token();
-    const runFd = fs.openSync(logs.run, "a");
+    const serviceLog = openMaskedLog(logs.run);
+    this.logSinks.push(serviceLog);
     this.service = spawn(agentdock, ["-log-level", "info"], {
       detached: true,
-      stdio: ["ignore", runFd, runFd],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         AGENTDOCK_AUTH_TOKEN: token,
@@ -284,6 +372,8 @@ export class AgentDockManager {
     this.service.on("error", (e) => {
       this.lastError = String(e?.message || e);
     });
+    serviceLog.pump(this.service.stdout);
+    serviceLog.pump(this.service.stderr);
     this.service.unref?.();
 
     this.url = url;
@@ -347,6 +437,9 @@ export class AgentDockManager {
       persisted: this.#readPersisted(),
     });
     this.#clearPersisted();
+    const sinks = this.logSinks;
+    this.logSinks = [];
+    await Promise.all(sinks.map((sink) => sink.close()));
     this.tunnel = null;
     this.service = null;
     this.url = "";
