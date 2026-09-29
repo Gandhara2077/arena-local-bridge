@@ -265,6 +265,23 @@ needs no extra care. Internal probes (`体检`) do **not** consume the one-shot 
 The preamble is sent **once per session**, and only while the tunnel is up; it is kept short on purpose
 because a long first message raises Arena's reCAPTCHA risk.
 
+### Read-only skill roots (optional)
+
+Beyond the workspace you can grant additional **read-only** directories — typically your global
+agent skills — via `ARENA_SKILL_ROOTS` (absolute paths, separated by the platform path delimiter:
+
+```
+# POSIX
+ARENA_SKILL_ROOTS=/home/me/.workbuddy/skills:/home/me/shared-prompts
+# Windows
+ARENA_SKILL_ROOTS=C:\Users\me\.workbuddy\skills;D:\shared-prompts
+```
+
+Unset means no read-only roots at all — nothing outside the workspace is readable. Explicit is the
+point: only the listed directories are opened, never the home wholesale. Entries must be absolute,
+must not overlap the workspace (a skill root that intersects it would silently be writable, so
+configuration is refused), and the bridge data directory is denied regardless.
+
 ## Security model
 
 The bridge handles highly sensitive local data because it stores Arena authentication state.
