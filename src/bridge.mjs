@@ -15,7 +15,7 @@ import {
   repeatedToolGuard,
 } from "./parser.mjs";
 import { log, retry, maskTunnelUrl } from "./util.mjs";
-import { mcpPreamble } from "./mcp-preamble.mjs";
+import { injectionPlan, mcpPreamble } from "./mcp-preamble.mjs";
 import { resolveWorkspace } from "./codex-workspace.mjs";
 import { readSnapshot } from "./probe/index.mjs";
 import { VERSION } from "./version.mjs";
@@ -39,7 +39,9 @@ const encoder = new TextEncoder();
 // That placement is the whole point. When the replay key was built at the call
 // site, the caller had already reassigned `prompt` to the decorated text, so the
 // preamble and the fresh marker leaked back into it and a named retry could
-// never match. Deriving both keys in one function makes that mistake impossible.
+// never match. So this takes the logical request and hands back the keys plus a
+// `decorate` that is the ONLY way to build the finished text: no caller can feed
+// decorated text back into a key.
 //
 // Joining is safe on `session + logical request`: if the identical request is
 // still running, handing back the same work is exactly what stops a client
@@ -53,22 +55,32 @@ const encoder = new TextEncoder();
 // Kept as a pure function so that this invariant is testable — see
 // test/bridge.test.mjs. It lives here rather than in util.mjs because the Arena
 // prompt shapes are this module's business, not a shared helper.
-export function prepareTurnInput({ sessionId, prompt, preamble = "", marker = "", idempotencyKey = "" }) {
-  let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
-  if (marker) {
-    finalPrompt = `${finalPrompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
-  }
+export function prepareTurnInput({ sessionId, prompt, idempotencyKey = "" }) {
   const digest = (value) => crypto.createHash("sha1").update(value).digest("hex");
   const identity = String(idempotencyKey || "").trim();
   return {
     inflightKey: `${sessionId}|${digest(prompt)}`,
     replayKey: identity ? `${sessionId}|${digest(`${identity}\n${prompt}`)}` : "",
-    finalPrompt,
+    // Deferred on purpose: see the ordering comment in converse(). Everything a
+    // turn spends (the one-shot preamble, a pending manual re-injection) may be
+    // taken only once we know the turn really goes out — so the text that
+    // carries them is built then, not here.
+    decorate: ({ preamble = "", marker = "" } = {}) => {
+      let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
+      if (marker) {
+        finalPrompt = `${finalPrompt}\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：${marker}）`;
+      }
+      return finalPrompt;
+    },
   };
 }
 
 // The header a caller uses to say "this is the same request as before".
 export const IDEMPOTENCY_HEADER = "x-arena-idempotency-key";
+
+// The header Codex sends to name its own conversation, and the one
+// resolveWorkspace() turns into a directory (see codex-workspace.mjs).
+export const CODEX_SESSION_HEADER = "x-codex-session-id";
 
 export class Bridge {
   constructor({ config, credentials, recaptcha, startedAt = Date.now() }) {
@@ -106,6 +118,14 @@ export class Bridge {
     // §4.25 — auto-inject the local AgentDock MCP endpoint into a session the
     // first time we talk to it (and again whenever the endpoint changes).
     this.mcpInjected = this.#loadMcpInjected();
+    // Ticket 14 — sessions whose next turn must be told again, even though the
+    // automatic injection already fired. Armed by /api/mcp/reinject, spent by
+    // the first real turn that follows (see localCapabilityForTurn).
+    this.mcpReinjectPending = new Set();
+    // Which Codex conversation drives each Arena session, remembered from the
+    // turns that came with the header. A manual re-injection has no request to
+    // read it from (see #workspaceHeaders).
+    this.codexSessionBySession = new Map();
     // §4.28 — key -> promise, so identical concurrent calls (client retries after
     // a timeout) join one run instead of double-sending the prompt to Arena.
     this.inflight = new Map();
@@ -145,40 +165,127 @@ export class Bridge {
   }
 
   /**
-   * Returns the one-line MCP connection hint to prepend to the prompt, or "".
-   * The endpoint file is written by start-arena-mcp.ps1 and deleted by
-   * stop-arena-mcp.ps1, so injection only happens while the tunnel is up.
+   * The endpoint file as it stands NOW: written by start-arena-mcp.ps1, deleted
+   * by stop-arena-mcp.ps1. null while no tunnel is up.
    */
-  #mcpEndpointLine(sessionId, headers = null) {
-    if (!this.config.mcpEndpointFile) return "";
+  #currentEndpoint() {
+    if (!this.config.mcpEndpointFile) return null;
     let endpoint;
     try {
       endpoint = JSON.parse(fs.readFileSync(this.config.mcpEndpointFile, "utf8"));
     } catch {
-      return ""; // no tunnel running
+      return null; // no tunnel running
     }
     const url = String(endpoint?.url || "").trim();
     const token = String(endpoint?.token || "").trim();
-    if (!url || !token) return "";
-    const fingerprint = `${url}|${token.slice(0, 8)}`;
-    if (this.mcpInjected.get(sessionId) === fingerprint) return ""; // already told
-    this.mcpInjected.set(sessionId, fingerprint);
-    this.#saveMcpInjected();
+    if (!url || !token) return null;
+    // Hash the WHOLE token: a fingerprint over its first 8 characters would
+    // call a rotated token "the same endpoint" and skip the re-injection the
+    // new tunnel needs. The hash is stored, never the token itself.
+    const digest = crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
+    return { url, token, fingerprint: `${url}|${digest}` };
+  }
+
+  /**
+   * What resolveWorkspace() should see. A Codex request names its own
+   * conversation, and that name is what turns "some recent transcript" into
+   * "THIS conversation's directory" — but a manual re-injection has no request
+   * to read it from, and the recent-transcript fallback is ambiguous exactly
+   * when it matters (two projects being talked to at once). So the name this
+   * Session was last served with is reused.
+   */
+  #workspaceHeaders(sessionId, headers) {
+    const merged = { ...(headers || {}) };
+    if (!String(merged[CODEX_SESSION_HEADER] || "").trim()) {
+      const remembered = this.codexSessionBySession.get(sessionId);
+      if (remembered) merged[CODEX_SESSION_HEADER] = remembered;
+    }
+    return merged;
+  }
+
+  /**
+   * What THIS turn carries: the local-capability preamble (or "") plus what was
+   * decided, so callers can report it. Called while preparing every turn.
+   *
+   * A session is told once per endpoint (§4.25) — unless a manual re-injection
+   * is pending for it, which forces one more and is then spent. Only a real
+   * turn reaches Arena, so THIS is where the words actually get delivered; the
+   * manual entry only arms it.
+   */
+  localCapabilityForTurn(sessionId, headers = null) {
+    const endpoint = this.#currentEndpoint();
+    const pending = this.mcpReinjectPending.has(sessionId);
+    const plan = injectionPlan({
+      injected: this.mcpInjected.get(sessionId) || "",
+      endpoint: endpoint?.fingerprint || "",
+      force: pending,
+    });
+    if (!plan.inject) {
+      return { injected: false, pending, reason: plan.reason, workspace: "", workspaceFrom: "none", preamble: "" };
+    }
     const { workspace, source } = resolveWorkspace({
-      headers,
+      headers: this.#workspaceHeaders(sessionId, headers),
       sessionsRoot: this.config.codexSessionsDir,
       windowMs: this.config.codexRecentWindowMs,
       fallback: this.config.mcpWorkspace,
     });
-    log.info("bridge", "converse: injecting local MCP endpoint into session", {
+    const preamble = mcpPreamble({ url: endpoint.url, token: endpoint.token, workspace });
+    this.mcpInjected.set(sessionId, endpoint.fingerprint);
+    this.#saveMcpInjected();
+    if (pending) this.mcpReinjectPending.delete(sessionId);
+    log.info("bridge", pending ? "local capability re-injected (armed by request)" : "converse: injecting local MCP endpoint into session", {
       sessionId,
       // Masked like the AgentDock start line: the random subdomain is what makes
       // the tunnel unguessable, so the URL is a credential once the logs travel.
-      url: maskTunnelUrl(url),
+      url: maskTunnelUrl(endpoint.url),
       workspace: workspace || null,
       workspaceFrom: source,
+      reason: plan.reason,
     });
-    return mcpPreamble({ url, token, workspace });
+    return { injected: true, pending, reason: plan.reason, workspace, workspaceFrom: source, preamble };
+  }
+
+  /**
+   * Ticket 14's manual entry. It does NOT inject: a preamble only reaches the
+   * model as part of a real turn, so generating one here and marking the
+   * session "already told" would mean Arena never receives anything while the
+   * next turn thinks it is done. It checks what it can (endpoint up, workspace
+   * recognizable) and ARMS the next turn to inject once more.
+   *
+   * Pending lives in memory on purpose: it is a one-shot request about the next
+   * turn of a session this process is already serving. A restart drops it, and
+   * the ordinary once-per-Session rule still applies.
+   */
+  reinjectLocalCapability(sessionId, headers = null) {
+    const endpoint = this.#currentEndpoint();
+    const plan = injectionPlan({ injected: "", endpoint: endpoint?.fingerprint || "", force: true });
+    if (!plan.inject) {
+      return { injected: false, pending: false, reason: plan.reason, workspace: "", workspaceFrom: "none" };
+    }
+    const { workspace, source } = resolveWorkspace({
+      headers: this.#workspaceHeaders(sessionId, headers),
+      sessionsRoot: this.config.codexSessionsDir,
+      windowMs: this.config.codexRecentWindowMs,
+      fallback: this.config.mcpWorkspace,
+    });
+    // A manual request exists to RECOVER the workspace; arming a turn that
+    // still has none would look fixed while nothing changed, and the file
+    // tools would stay unusable. Say why instead.
+    if (!workspace) {
+      log.warn("bridge", "local capability NOT enabled: no workspace recognized", {
+        sessionId,
+        workspaceFrom: source,
+        hint: "send the x-arena-workspace header, or set ARENA_MCP_WORKSPACE for a default",
+      });
+      return { injected: false, pending: false, reason: "no workspace recognized", workspace: "", workspaceFrom: source };
+    }
+    this.mcpReinjectPending.add(sessionId);
+    log.info("bridge", "local capability re-injection armed for the next turn", {
+      sessionId,
+      workspace,
+      workspaceFrom: source,
+    });
+    return { injected: false, pending: true, reason: "armed: the next turn re-injects", workspace, workspaceFrom: source };
   }
 
   async start() {
@@ -194,16 +301,24 @@ export class Bridge {
     });
   }
 
+  /**
+   * Queue admission, asked TWICE on purpose: once by the caller before the turn
+   * spends anything (see converse) and once here, where the depth may have moved
+   * since. A refused request never reaches Arena, so nothing one-shot may be
+   * spent on it — the manual re-injection would otherwise be consumed by a 503.
+   */
+  #queueFull() {
+    if (this.runtime.queueDepth < this.config.maxQueue) return null;
+    return Object.assign(new Error("Arena bridge queue is full; retry shortly"), {
+      status: 503,
+      retryAfter: 10,
+      code: "bridge_queue_full",
+    });
+  }
+
   #serialized(fn) {
-    if (this.runtime.queueDepth >= this.config.maxQueue) {
-      return Promise.reject(
-        Object.assign(new Error("Arena bridge queue is full; retry shortly"), {
-          status: 503,
-          retryAfter: 10,
-          code: "bridge_queue_full",
-        })
-      );
-    }
+    const full = this.#queueFull();
+    if (full) return Promise.reject(full);
     this.runtime.queueDepth += 1;
     const execute = async () => {
       this.runtime.activeRequests += 1;
@@ -1145,6 +1260,12 @@ export class Bridge {
     if (!prompt || !prompt.trim()) {
       throw Object.assign(new Error("No user message to send"), { status: 400, code: "empty_prompt" });
     }
+    // Remember which Codex conversation this Arena session belongs to: the
+    // manual re-injection is asked for by the GUI, which has no request to read
+    // the header from, and without it the workspace is guessed from "the most
+    // recent transcript" — wrong as soon as two projects are in play.
+    const codexSessionId = String(options.headers?.[CODEX_SESSION_HEADER] || "").trim();
+    if (codexSessionId) this.codexSessionBySession.set(sessionId, codexSessionId);
     // The owning Account is normally resolved by the caller BEFORE it opens a
     // response — a known-but-unusable owner must surface as a clean 409, not as
     // a mid-stream disconnect. Resolve here only for callers that did not, so
@@ -1159,33 +1280,14 @@ export class Bridge {
       account: account.email,
       from: String(options.accountEmail || "").trim() ? "session-owner" : "pool-default",
     });
-    // §4.25 — if the local AgentDock MCP endpoint is up, tell the session about
-    // it once (kept deliberately short: long messages trip Arena's reCAPTCHA).
-    // Internal probes (体检) must not consume the once-per-session MCP preamble:
-    // injection is one-shot, so a health check would spend it and the real
-    // conversation would never be told about the workspace.
-    const mcpLine = options.injectMcp === false ? "" : this.#mcpEndpointLine(sessionId, options.headers || null);
-
-    // §4.36 — explicit end-of-turn marker (random per request). When the agent
-    // echoes it we KNOW the turn is over, instead of inferring it from finish
-    // events or quiet gaps. A fresh nonce can never appear in replayed history,
-    // so it also tells us which turn is ours.
-    const marker = this.config.turnMarkerEnabled
-      ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
-      : "";
-
     // §4.33 — both keys must describe the caller's LOGICAL request, so both are
-    // derived in here, before the preamble and the marker are applied. Note that
-    // both come from the same argument: the decorated text never reaches a key.
-    const { inflightKey, replayKey, finalPrompt } = prepareTurnInput({
+    // derived here, from the one argument that is still the caller's own text
+    // (see prepareTurnInput). Nothing has been added to the prompt yet.
+    const { inflightKey, replayKey, decorate } = prepareTurnInput({
       sessionId,
       prompt,
-      preamble: mcpLine,
-      marker,
       idempotencyKey: String(options.headers?.[IDEMPOTENCY_HEADER] || options.idempotencyKey || ""),
     });
-    prompt = finalPrompt;
-    if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
 
     const existing = this.inflight.get(inflightKey);
     if (existing) {
@@ -1201,6 +1303,37 @@ export class Bridge {
       log.info("bridge", "converse: served from idempotency cache (client retry)", { sessionId });
       return cached.payload;
     }
+
+    // And a turn the QUEUE will refuse is not a real turn either: ask admission
+    // here, before anything is spent, so a 503 cannot eat the arming either.
+    // (#serialized asks again when the work is enqueued — the depth can move.)
+
+    const full = this.#queueFull();
+    if (full) throw full;
+
+    // Past this point the request is a real turn: nothing above can answer it
+    // any more, so this is where everything a turn SPENDS is taken. A request
+    // answered from inflight or from the idempotency cache never reaches the
+    // model, and spending there would burn it on a turn Arena never sees — the
+    // manual re-injection (ticket 14) would report "armed" and then vanish.
+    //
+    // Internal probes (体检) pass injectMcp:false and take nothing at all:
+    // injection is one-shot, so a health check would spend it and the real
+    // conversation would never be told about the workspace.
+    const mcpLine =
+      options.injectMcp === false
+        ? ""
+        : this.localCapabilityForTurn(sessionId, options.headers || null).preamble;
+
+    // §4.36 — explicit end-of-turn marker (random per request). When the agent
+    // echoes it we KNOW the turn is over, instead of inferring it from finish
+    // events or quiet gaps. A fresh nonce can never appear in replayed history,
+    // so it also tells us which turn is ours.
+    const marker = this.config.turnMarkerEnabled
+      ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
+      : "";
+    prompt = decorate({ preamble: mcpLine, marker });
+    if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
 
     const work = this.#serialized(() => this.browser.withAccount(account, async () => {
       // Fresh per-request dedupe ledger for the streaming channel (§4.33).

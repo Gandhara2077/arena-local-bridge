@@ -33,6 +33,7 @@ import {
   setAccountQuota,
   unbind,
 } from "./pool.mjs";
+import { WORKSPACE_HEADER } from "./mcp-preamble.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -411,6 +412,33 @@ export function createServer({ bridge, config }) {
     // §4.26 — one-click local MCP bridge (AgentDock + cloudflared tunnel).
     if (url.pathname === "/api/mcp/status") {
       return json(res, 200, await agentdock.status());
+    }
+
+    // Ticket 14 — the manual re-injection entry: resolve the workspace of a
+    // Session that was created before we knew it (or whose workspace changed)
+    // and inject once more. Defaults to the GUI's active session; the body may
+    // name another one. Nothing is silent: the response carries `reason`
+    // whether or not anything was injected.
+    if (req.method === "POST" && url.pathname === "/api/mcp/reinject") {
+      try {
+        const body = (await readBody(req)) || {};
+        const sessionId = String(body.sessionId || "").trim() || activeSession;
+        if (!isSessionId(sessionId)) {
+          return json(res, 400, { error: { message: "sessionId must be a UUID (or set an active session first)" } });
+        }
+        // The header is the documented workspace contract, so it wins over the
+        // body field the GUI sends for convenience.
+        const workspace = String(req.headers[WORKSPACE_HEADER] || body.workspace || "").trim();
+        const outcome = await bridge.reinjectLocalCapability(sessionId, { [WORKSPACE_HEADER]: workspace });
+        const hint = outcome.injected || outcome.pending
+          ? ""
+          : outcome.reason === "no local endpoint is up"
+            ? "本机 MCP 还没起来：先点「一键启动」。"
+            : `没认出工作区：请求里带 ${WORKSPACE_HEADER} 头，或设置 ARENA_MCP_WORKSPACE。`;
+        return json(res, 200, { sessionId, ...outcome, hint });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
     }
 
     // ── ModelPool actions (operator-initiated, so they go behind the key) ───

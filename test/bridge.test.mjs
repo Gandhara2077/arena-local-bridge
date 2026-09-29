@@ -7,7 +7,8 @@
 // attempt and its retry: dedupe would miss, the client's timeout would send the
 // turn into Arena a second time, and a named retry would never hit the result
 // cache. Both keys are therefore derived inside this one function, from the one
-// argument that is still logical — a caller cannot hand it decorated text.
+// argument that is still logical — and the finished text is only reachable
+// through the `decorate` it hands back, so a caller cannot key off it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { prepareTurnInput, IDEMPOTENCY_HEADER } from "../src/bridge.mjs";
@@ -19,26 +20,28 @@ const PREAMBLE = "[本地 MCP 已接入] endpoint: https://example.trycloudflare
 // ── the inflight key: joins a run that is still going ────────────────────────
 
 test("prepareTurnInput: the inflight key ignores the per-request marker", () => {
-  const first = prepareTurnInput({ sessionId: SID_A, prompt: "hello", marker: "DONE-AAAA" });
-  const retry = prepareTurnInput({ sessionId: SID_A, prompt: "hello", marker: "DONE-BBBB" });
+  const first = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
+  const retry = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
   assert.equal(first.inflightKey, retry.inflightKey);
   // …even though what goes to Arena really does differ.
-  assert.notEqual(first.finalPrompt, retry.finalPrompt);
+  assert.notEqual(first.decorate({ marker: "DONE-AAAA" }), retry.decorate({ marker: "DONE-BBBB" }));
 });
 
 test("prepareTurnInput: the inflight key ignores the one-shot MCP preamble", () => {
   // The retry carries no preamble: injection is once per Session (§4.25).
-  const firstCall = prepareTurnInput({ sessionId: SID_A, prompt: "hello", preamble: PREAMBLE, marker: "DONE-AAAA" });
-  const retry = prepareTurnInput({ sessionId: SID_A, prompt: "hello", marker: "DONE-BBBB" });
+  const firstCall = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
+  const retry = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
+  firstCall.decorate({ preamble: PREAMBLE, marker: "DONE-AAAA" });
+  retry.decorate({ marker: "DONE-BBBB" });
   assert.equal(firstCall.inflightKey, retry.inflightKey);
 });
 
 test("prepareTurnInput: the marker switch is transparent to the inflight key", () => {
-  const markerOn = prepareTurnInput({ sessionId: SID_A, prompt: "hello", marker: "DONE-AAAA" });
+  const markerOn = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
   const markerOff = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
   assert.equal(markerOn.inflightKey, markerOff.inflightKey);
-  assert.equal(markerOff.finalPrompt, "hello");
-  assert.ok(markerOn.finalPrompt.includes("DONE-AAAA"));
+  assert.equal(markerOff.decorate(), "hello");
+  assert.ok(markerOn.decorate({ marker: "DONE-AAAA" }).includes("DONE-AAAA"));
 });
 
 test("prepareTurnInput: the inflight key is scoped to Session and request", () => {
@@ -54,19 +57,10 @@ test("prepareTurnInput: the inflight key is scoped to Session and request", () =
 // the fresh marker leaked back into it and a named retry could never match. The
 // two attempts below differ in every decoration and must still replay.
 test("prepareTurnInput: a named retry replays across differing decorations", () => {
-  const first = prepareTurnInput({
-    sessionId: SID_A,
-    prompt: "hello",
-    preamble: PREAMBLE,
-    marker: "DONE-AAAA",
-    idempotencyKey: "req-1",
-  });
-  const retry = prepareTurnInput({
-    sessionId: SID_A,
-    prompt: "hello",
-    marker: "DONE-BBBB",
-    idempotencyKey: "req-1",
-  });
+  const first = prepareTurnInput({ sessionId: SID_A, prompt: "hello", idempotencyKey: "req-1" });
+  const retry = prepareTurnInput({ sessionId: SID_A, prompt: "hello", idempotencyKey: "req-1" });
+  first.decorate({ preamble: PREAMBLE, marker: "DONE-AAAA" });
+  retry.decorate({ marker: "DONE-BBBB" });
   assert.notEqual(first.replayKey, "");
   assert.equal(first.replayKey, retry.replayKey);
 });
@@ -105,10 +99,13 @@ test("IDEMPOTENCY_HEADER: the caller-facing name is stable", () => {
 // ── what actually goes to Arena ─────────────────────────────────────────────
 
 test("prepareTurnInput: keeps the existing Arena prompt shapes", () => {
-  assert.equal(prepareTurnInput({ sessionId: SID_A, prompt: "hello" }).finalPrompt, "hello");
-  assert.equal(prepareTurnInput({ sessionId: SID_A, prompt: "hello", preamble: "PRE" }).finalPrompt, "PRE\nhello");
+  const plain = prepareTurnInput({ sessionId: SID_A, prompt: "hello" });
+  assert.equal(plain.decorate(), "hello");
+  assert.equal(plain.decorate({ preamble: "PRE" }), "PRE\nhello");
   assert.equal(
-    prepareTurnInput({ sessionId: SID_A, prompt: "hello", marker: "DONE-AAAA" }).finalPrompt,
+    plain.decorate({ marker: "DONE-AAAA" }),
     "hello\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：DONE-AAAA）"
   );
+  // Decorating never rewrote the request the keys were derived from.
+  assert.equal(plain.decorate({ preamble: "PRE", marker: "DONE-AAAA" }), "PRE\nhello\n\n（本轮任务完成后，请在最后单独一行原样输出这串标记，不要解释它：DONE-AAAA）");
 });

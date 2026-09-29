@@ -351,3 +351,56 @@ describe("operator endpoints over real HTTP", () => {
     } finally { await e2e.close(); }
   });
 });
+
+describe("POST /api/mcp/reinject — the manual entry for a session whose workspace arrived late", () => {
+  // Nothing is injected by the call itself: it ARMS the next real turn, which
+  // is the only thing that carries the preamble to the model.
+  const outcome = { injected: false, pending: true, reason: "armed: the next turn re-injects", workspace: "/w", workspaceFrom: "request-header" };
+
+  test("it defaults to the active session and returns what happened", async (t) => {
+    const calls = [];
+    const ctx = await startE2E({ bridge: { reinjectLocalCapability: async (sessionId, headers) => { calls.push({ sessionId, headers }); return outcome; } } });
+    t.after(() => ctx.close());
+    await httpRequest(ctx.port, { method: "POST", reqPath: "/api/active-session", headers: authHeaders({ "Content-Type": "application/json" }), body: { sessionId: SESSION_ID } });
+    const res = await httpRequest(ctx.port, { method: "POST", reqPath: "/api/mcp/reinject", headers: authHeaders({ "Content-Type": "application/json" }), body: {} });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls.map((c) => c.sessionId), [SESSION_ID]);
+    assert.equal(res.json.sessionId, SESSION_ID);
+    assert.equal(res.json.pending, true);
+    assert.equal(res.json.workspace, "/w");
+    assert.equal(res.json.hint, "");
+  });
+
+  test("the x-arena-workspace header is forwarded — it is the documented contract", async (t) => {
+    const calls = [];
+    const ctx = await startE2E({ bridge: { reinjectLocalCapability: async (sessionId, headers) => { calls.push({ sessionId, headers }); return outcome; } } });
+    t.after(() => ctx.close());
+    await httpRequest(ctx.port, {
+      method: "POST",
+      reqPath: "/api/mcp/reinject",
+      headers: authHeaders({ "Content-Type": "application/json", "x-arena-workspace": "/from-header" }),
+      body: { sessionId: SESSION_ID, workspace: "/from-body" },
+    });
+    assert.equal(calls[0].headers["x-arena-workspace"], "/from-header", "the header wins over the body field");
+  });
+
+  test("a refusal comes back with the reason AND how to fix it", async (t) => {
+    const ctx = await startE2E({ bridge: { reinjectLocalCapability: async () => ({ injected: false, pending: false, reason: "no workspace recognized", workspace: "", workspaceFrom: "none" }) } });
+    t.after(() => ctx.close());
+    const res = await httpRequest(ctx.port, { method: "POST", reqPath: "/api/mcp/reinject", headers: authHeaders({ "Content-Type": "application/json" }), body: { sessionId: SESSION_ID } });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.injected, false);
+    assert.equal(res.json.pending, false);
+    assert.equal(res.json.reason, "no workspace recognized");
+    assert.match(res.json.hint, /x-arena-workspace/);
+  });
+
+  test("no session anywhere is an actionable 400, and the key still guards it", async (t) => {
+    const ctx = await startE2E({ bridge: { reinjectLocalCapability: async () => outcome } });
+    t.after(() => ctx.close());
+    const res = await httpRequest(ctx.port, { method: "POST", reqPath: "/api/mcp/reinject", headers: authHeaders({ "Content-Type": "application/json" }), body: { sessionId: "" } });
+    assert.equal(res.status, 400);
+    const noKey = await httpRequest(ctx.port, { method: "POST", reqPath: "/api/mcp/reinject", headers: { "Content-Type": "application/json" }, body: { sessionId: SESSION_ID } });
+    assert.equal(noKey.status, 401);
+  });
+});
