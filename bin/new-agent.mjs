@@ -39,7 +39,7 @@ const bridge = new Bridge({ config, credentials, recaptcha: null });
 try {
   await bridge.start();
   const credential = credentials.primary();
-  const page = await bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
+  const page = await bridge.browser.getPage(credential);
 
   console.log(
     JSON.stringify({ event: "create-start", account: credential.email, label, promptChars: prompt.length })

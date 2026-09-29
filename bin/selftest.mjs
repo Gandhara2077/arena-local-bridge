@@ -34,7 +34,7 @@ async function main() {
   const bridge = new Bridge({ config, credentials, recaptcha: null });
   await bridge.start();
   try {
-    const page = await bridge.browser.getPage(account.cookieHeader, account.updatedAt);
+    const page = await bridge.browser.getPage(account);
     // tiny probe session
     const state = await bridge.createAgentSession(
       page,
