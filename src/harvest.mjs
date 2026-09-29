@@ -86,13 +86,25 @@ export class Harvester {
     return { ok: true, total };
   }
 
-  async #run({ total, prompt, intervalMs }) {
+  /**
+   * A batch holds its Account's context for its whole duration, so a credential
+   * refresh during a long run marks it stale but cannot rebuild it mid-round.
+   */
+  async #run(args) {
     const credential = this.credentials.primary();
     if (!credential) throw new Error("没有可用账号，先运行 bin/login.mjs 登录");
+    // The SAME credential drives the lease and every page the batch takes. A
+    // second primary() lookup inside could resolve to a different Account, which
+    // would leave the lease protecting one Account's context while the work ran
+    // on another's.
+    return this.bridge.browser.withAccount(credential, () => this.#runBatch({ ...args, credential }));
+  }
+
+  async #runBatch({ total, prompt, intervalMs, credential }) {
 
     // One page for the whole batch: createAgentSession() navigates to /agent
     // each round, so a single page is enough and avoids re-auth churn.
-    const page = await this.bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
+    const page = await this.bridge.browser.getPage(credential);
 
     // The page already carries the probe — ArenaBrowser.getPage injects it into
     // every page it hands out — so model attribution and the reasoning tier come

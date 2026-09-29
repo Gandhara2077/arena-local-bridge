@@ -24,6 +24,26 @@ export function resolvePlaywright(omniRoot) {
   );
 }
 
+/**
+ * What should happen to an Account's context on the way into getPage()?
+ *
+ *   create      — this Account has no context yet
+ *   reuse       — nothing about its credential changed
+ *   rebuild     — the credential changed and nobody is using the context
+ *   reuse-stale — the credential changed but the context is busy
+ *
+ * `reuse-stale` is the one that matters. Rebuilding closes every page in the
+ * context, including the turn running right now, which is exactly what the old
+ * "close the browser when a credential refreshes" did — and why a refresh used
+ * to cut off work that started before it. Living briefly with stale cookies
+ * beats that. The dirty mark survives, so the next idle call rebuilds.
+ */
+export function contextAction({ hasContext = false, dirty = false, leases = 0 } = {}) {
+  if (!hasContext) return "create";
+  if (!dirty) return "reuse";
+  return leases === 0 ? "rebuild" : "reuse-stale";
+}
+
 export class ArenaBrowser {
   constructor({ omniRoot = "", chromePath = "", proxy = "", userAgent } = {}) {
     this.pw = resolvePlaywright(omniRoot);
@@ -35,10 +55,11 @@ export class ArenaBrowser {
     // "recaptcha validation failed". Let the genuine engine speak for itself.
     this.userAgent = userAgent || "";
     this.browser = null;
-    this.context = null;
-    this.page = null;
-    this.recaptchaPage = null;
-    this.credentialSignature = "";
+    // One context per Account, keyed by email. A single shared context meant a
+    // refresh for one Account rebuilt the world for all of them, and that the
+    // batch/reprobe/quota flows all queued behind the same pages.
+    //   { context, page, recaptchaPage, signature, dirty, leases, warned }
+    this.contexts = new Map();
     // Pages already carrying the model probe. addInitScript is per-page, and
     // re-adding it on every call would make each navigation parse the bundle
     // again — the probe itself no-ops on a same-version repeat, but the parse
@@ -69,22 +90,96 @@ export class ArenaBrowser {
     );
   }
 
-  async getPage(cookieHeader = "", signature = "") {
-    const browser = await this.launch();
-    if (!this.context || this.credentialSignature !== signature) {
-      await this.context?.close().catch(() => undefined);
-      this.recaptchaPage = null;
+  #entry(account) {
+    let entry = this.contexts.get(account);
+    if (!entry) {
+      entry = {
+        context: null,
+        page: null,
+        recaptchaPage: null,
+        signature: "",
+        staleSince: 0,
+        warned: false,
+        leases: 0,
+      };
+      this.contexts.set(account, entry);
+    }
+    return entry;
+  }
+
+  /** How many operations currently hold this Account's context. */
+  leaseCount(account = "") {
+    return this.#entry(String(account || "")).leases;
+  }
+
+  /**
+   * Hold `credential`'s context for the duration of `fn`.
+   *
+   * While it is held, a credential refresh marks that Account's context stale but
+   * does not rebuild it — see contextAction(). Leases belong to OPERATIONS, not
+   * to getPage calls: a single turn asks for its page several times, so counting
+   * there would never return to zero. Everything that keeps a page for more than
+   * a moment goes through here, which is also what keeps acquire and release
+   * paired in one place instead of at every call site.
+   */
+  async withAccount(credential, fn) {
+    const account = String(credential?.email || "");
+    this.#entry(account).leases += 1;
+    try {
+      return await fn();
+    } finally {
+      this.release(account);
+    }
+  }
+
+  /** The operation is done with this Account's context. */
+  release(account = "") {
+    const entry = this.contexts.get(String(account || ""));
+    if (entry && entry.leases > 0) entry.leases -= 1;
+  }
+
+  /**
+   * A page for `credential`'s Account. Leases are not taken here — see acquire().
+   */
+  async getPage(credential = null) {
+    const account = String(credential?.email || "");
+    const cookieHeader = String(credential?.cookieHeader || "");
+    const signature = String(credential?.updatedAt || "");
+    const entry = this.#entry(account);
+
+    // A credential that changed means this Account's cookies are stale — but
+    // only this Account's, and only until it goes idle. See contextAction().
+    // `staleSince` is also what the status endpoint reports, so a context that
+    // stays stale (because its Account never goes idle) is visible rather than
+    // silently wrong.
+    if (entry.context && entry.signature !== signature && !entry.staleSince) entry.staleSince = Date.now();
+
+    const action = contextAction({
+      hasContext: Boolean(entry.context),
+      dirty: Boolean(entry.staleSince),
+      leases: entry.leases,
+    });
+    if (action === "reuse-stale" && !entry.warned) {
+      entry.warned = true;
+      log.warn("browser", "credential refreshed while this Account is busy; rebuilding when it is idle", {
+        account,
+        staleMs: Date.now() - entry.staleSince,
+      });
+    }
+    if (action === "create" || action === "rebuild") {
+      await entry.context?.close().catch(() => undefined);
+      entry.recaptchaPage = null;
       const contextOpts = {
         viewport: { width: 1440, height: 900 },
         locale: process.env.ARENA_LOCALE || "zh-CN",
       };
       if (this.userAgent) contextOpts.userAgent = this.userAgent;
-      this.context = await browser.newContext(contextOpts);
+      entry.context = await (await this.launch()).newContext(contextOpts);
       // Hide Playwright automation signals so reCAPTCHA v3 scores the session as
       // a genuine browser (same reason the Arena模型助手 WebView2 build passes:
       // a real browser engine reports navigator.webdriver === false). Mirrors the
       // --disable-blink-features=AutomationControlled launch flag above.
-      await this.context.addInitScript(() => {
+      await entry.context.addInitScript(() => {
         try {
           Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false, configurable: true });
         } catch {}
@@ -115,35 +210,66 @@ export class ArenaBrowser {
           } catch {}
         }
       });
-      if (cookieHeader) await this.context.addCookies(cookieHeaderToObjects(cookieHeader));
-      this.page = await this.context.newPage();
-      this.credentialSignature = signature;
+      if (cookieHeader) await entry.context.addCookies(cookieHeaderToObjects(cookieHeader));
+      entry.page = await entry.context.newPage();
+      entry.signature = signature;
+      entry.staleSince = 0;
+      entry.warned = false;
+      if (action === "rebuild") log.info("browser", "context rebuilt for a refreshed credential", { account });
     }
-    if (!this.page || this.page.isClosed()) this.page = await this.context.newPage();
+    if (!entry.page || entry.page.isClosed()) entry.page = await entry.context.newPage();
     // Every page this bridge drives carries the probe. A conversation run on it
     // then leaves a trace behind, and the trace's cost spans are where the USD
     // quota reading comes from — so the probe has to be registered BEFORE the
     // navigation that carries the turn, which is why it happens here rather
     // than at each call site.
-    if (!this.probedPages.has(this.page)) {
-      this.probedPages.add(this.page);
-      const installed = await installProbe(this.page);
+    if (!this.probedPages.has(entry.page)) {
+      this.probedPages.add(entry.page);
+      const installed = await installProbe(entry.page);
       this.probeAvailable = installed.ok;
       if (!installed.ok) {
-        this.probedPages.delete(this.page); // let a later call retry
+        this.probedPages.delete(entry.page); // let a later call retry
         log.warn("browser", "probe not installed", { error: installed.error });
       }
     }
-    return this.page;
+    return entry.page;
   }
 
+  /**
+   * Status only: which Accounts have a context, and whether any is waiting for a
+   * rebuild. Handles are deliberately not handed out here — a caller that needs
+   * a specific Account's page asks getPage() for it.
+   *
+   * `staleSince` is the visible half of the lease fallback: a context can wait
+   * for idle indefinitely if its Account never goes idle, and that shows up here
+   * (and in the health payload) instead of quietly serving a stale session.
+   */
+  snapshot() {
+    const accounts = [];
+    for (const [account, entry] of this.contexts) {
+      if (!entry.context) continue;
+      accounts.push({
+        account,
+        pageReady: Boolean(entry.page && !entry.page.isClosed()),
+        leases: entry.leases,
+        staleSince: entry.staleSince || null,
+      });
+    }
+    return { launched: Boolean(this.browser), accounts };
+  }
+
+  /** Shutdown, or recovery after the browser died: close every Account's context. */
   async close() {
-    await this.context?.close().catch(() => undefined);
+    for (const entry of this.contexts.values()) {
+      await entry.context?.close().catch(() => undefined);
+      entry.context = null;
+      entry.page = null;
+      entry.recaptchaPage = null;
+      entry.leases = 0;
+    }
+    this.contexts.clear();
     await this.browser?.close().catch(() => undefined);
-    this.context = null;
     this.browser = null;
-    this.page = null;
-    this.recaptchaPage = null;
   }
 
   /**
@@ -226,29 +352,41 @@ export class ArenaBrowser {
 
   /**
    * Generate a fresh reCAPTCHA v3 token (action chat_submit).
+   *
+   * Takes the whole credential, not a bare cookie header: the Account is what
+   * selects the context now. The old signature-less call also compared an empty
+   * signature against a stored one, so it rebuilt the context on every token.
    */
-  async freshRecaptchaToken(cookieHeader, siteKey) {
-    const page = await this.getPage(cookieHeader);
-    let target = this.recaptchaPage;
-    if (!target || target.isClosed()) target = await this.context.newPage();
-    this.recaptchaPage = target;
-    if (!target.url().startsWith("https://arena.ai/")) {
-      await target.goto("https://arena.ai/", { waitUntil: "domcontentloaded", timeout: 45_000 });
-    }
-    if (!(await target.evaluate(() => typeof globalThis.grecaptcha?.enterprise?.execute === "function"))) {
-      await target.addScriptTag({ url: `https://www.google.com/recaptcha/enterprise.js?render=${siteKey}` });
-    }
-    await target.waitForFunction(
-      () => typeof globalThis.grecaptcha?.enterprise?.execute === "function",
-      { timeout: 30_000 }
-    );
-    const token = await target.evaluate(
-      async ({ key }) => globalThis.grecaptcha.enterprise.execute(key, { action: "chat_submit" }),
-      { key: siteKey }
-    );
-    if (typeof token !== "string" || token.length < 80) {
-      throw new Error("Fresh Arena reCAPTCHA token was empty or too short");
-    }
-    return token;
+  async freshRecaptchaToken(credential, siteKey) {
+    const account = String(credential?.email || "");
+    // Minting a token means navigating and then waiting up to 30s for Google's
+    // script, so it holds the context like any other operation. Releasing without
+    // this acquire would have decremented some other operation's lease and let a
+    // refresh rebuild the context underneath it.
+    return this.withAccount(credential, async () => {
+      await this.getPage(credential);
+      const entry = this.#entry(account);
+      let target = entry.recaptchaPage;
+      if (!target || target.isClosed()) target = await entry.context.newPage();
+      entry.recaptchaPage = target;
+      if (!target.url().startsWith("https://arena.ai/")) {
+        await target.goto("https://arena.ai/", { waitUntil: "domcontentloaded", timeout: 45_000 });
+      }
+      if (!(await target.evaluate(() => typeof globalThis.grecaptcha?.enterprise?.execute === "function"))) {
+        await target.addScriptTag({ url: `https://www.google.com/recaptcha/enterprise.js?render=${siteKey}` });
+      }
+      await target.waitForFunction(
+        () => typeof globalThis.grecaptcha?.enterprise?.execute === "function",
+        { timeout: 30_000 }
+      );
+      const token = await target.evaluate(
+        async ({ key }) => globalThis.grecaptcha.enterprise.execute(key, { action: "chat_submit" }),
+        { key: siteKey }
+      );
+      if (typeof token !== "string" || token.length < 80) {
+        throw new Error("Fresh Arena reCAPTCHA token was empty or too short");
+      }
+      return token;
+    });
   }
 }

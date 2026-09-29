@@ -68,10 +68,48 @@ function noActiveSessionError() {
   );
 }
 
-/** The shared browser page for operator actions (caller drives the navigation). */
-async function sessionPageFor(bridge) {
-  const credential = bridge.credentials?.primary?.() || null;
-  return bridge.browser.getPage(credential?.cookieHeader || "", credential?.updatedAt);
+/**
+ * 补标 — drive one real turn to make the probe learn a Model, then read the
+ * probe and hand the Model back for archiving.
+ *
+ * The owner is resolved ONCE and drives both steps, and both sit inside one
+ * lease, so a credential refresh cannot swap the context between the run and the
+ * read that attributes its Model. Reading the probe through the pool's default
+ * pick instead would answer with whichever Account ran last and write THAT
+ * Model into this Session — which is why the two steps are inseparable here
+ * rather than a line apart at the call site.
+ *
+ * `forSession` is used directly, with no wrapper: it already owns this policy —
+ * the owner wins, an owner-less (legacy) Session falls back to the pool's
+ * primary, and an owner that cannot be used is a 409. A wrapper here that
+ * restated that policy is exactly where it got restated wrong once.
+ *
+ * A failed turn skips the read: nothing new ran, so the only thing a read could
+ * return is the previous run's Model.
+ *
+ * Extracted from the request handler so this — the part that has actually been
+ * wrong once — can be driven directly in a test.
+ */
+export async function runReprobe({ bridge, sessionId, accountEmail, prompt }) {
+  try {
+    // The Session's owner — or the pool's primary when the archive has none
+    // (legacy records predate the Email column). An owner that cannot be used
+    // throws, and the report keeps the shape the endpoint already answered with.
+    const account = bridge.credentials.forSession(accountEmail);
+    const found = await bridge.browser.withAccount(account, async () => {
+      await bridge.converse(
+        sessionId,
+        { messages: [{ role: "user", content: prompt }] },
+        { injectMcp: false, account, accountEmail }
+      );
+      // converse leaves the page on the Session, with the probe having watched
+      // the run. Up to 20s on a page: not a moment, hence the lease around it.
+      return readSnapshot(await bridge.browser.getPage(account), { timeoutMs: 20_000 });
+    });
+    return { found, failure: null };
+  } catch (error) {
+    return { found: null, failure: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function busyError() {
@@ -444,23 +482,19 @@ export function createServer({ bridge, config }) {
         const sid = await poolSessionId(req, res);
         if (!sid) return;
         const prompt = `[arena-bridge model probe ${crypto.randomBytes(4).toString("hex")}] Reply with just: OK`;
-        let failure = null;
         turnsInFlight += 1;
+        let outcome;
         try {
-          await bridge.converse(
-            sid,
-            { messages: [{ role: "user", content: prompt }] },
-            { injectMcp: false, accountEmail: sessionAccountEmail(config.archiveDir, sid) }
-          );
-        } catch (error) {
-          failure = error instanceof Error ? error.message : String(error);
+          outcome = await runReprobe({
+            bridge,
+            sessionId: sid,
+            accountEmail: sessionAccountEmail(config.archiveDir, sid),
+            prompt,
+          });
         } finally {
           turnsInFlight -= 1;
         }
-        // converse leaves the page on the Session, with the probe having watched
-        // the run — so this read now has something to report.
-        const page = await sessionPageFor(bridge);
-        const found = await readSnapshot(page, { timeoutMs: 20_000 });
+        const { found, failure } = outcome;
         if (!found?.model) {
           return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: failure || found?.error || null });
         }
@@ -612,7 +646,7 @@ export function createServer({ bridge, config }) {
     if (req.method === "POST" && url.pathname === "/recaptcha") {
       const credential = bridge.credentials.primary();
       try {
-        const token = await bridge.recaptcha.get(credential?.cookieHeader, true);
+        const token = await bridge.recaptcha.get(credential, true);
         return json(res, 200, { token, action: "chat_submit" });
       } catch (error) {
         return json(

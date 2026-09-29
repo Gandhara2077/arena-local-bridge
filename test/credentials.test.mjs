@@ -13,6 +13,46 @@ function store() {
   return new CredentialStore({ filePath: path.join(dir, "credentials.json"), secret: "test-secret" });
 }
 
+// forSession is what decides which Account drives a Session, and its policy is
+// the whole point of it. Not previously covered anywhere — which is how a
+// wrapper around it came to restate the policy wrongly.
+test("forSession: a Session's owner wins over the primary", () => {
+  const s = store();
+  s.upsert({ email: "primary@example.com", cookieHeader: "a=1", password: "p", priority: 1 });
+  s.upsert({ email: "owner@example.com", cookieHeader: "b=2", password: "p", priority: 9 });
+  assert.equal(s.primary().email, "primary@example.com");
+  assert.equal(s.forSession("owner@example.com").email, "owner@example.com");
+});
+
+test("forSession: a Session with no owner falls back to the primary", () => {
+  const s = store();
+  s.upsert({ email: "primary@example.com", cookieHeader: "a=1", password: "p", priority: 1 });
+  // Records archived before the Email column existed have no owner at all, so
+  // "" has to keep meaning "use whatever the pool considers primary".
+  assert.equal(s.forSession("").email, "primary@example.com");
+  assert.equal(s.forSession("   ").email, "primary@example.com");
+  assert.equal(s.forSession(undefined).email, "primary@example.com");
+});
+
+test("forSession: an owner that cannot be used is a 409, never a substitution", () => {
+  const s = store();
+  s.upsert({ email: "primary@example.com", cookieHeader: "a=1", password: "p", priority: 1 });
+  s.upsert({ email: "gone@example.com", cookieHeader: "b=2", password: "p", priority: 2 });
+  s.disable("gone@example.com", "restricted");
+
+  // Handing back the primary here would turn "this Session has no usable
+  // Account" into "attribute some other Account's Model to it".
+  assert.throws(
+    () => s.forSession("nobody@example.com"),
+    (error) => {
+      assert.equal(error.status, 409);
+      assert.equal(error.code, "session_account_unavailable");
+      return true;
+    }
+  );
+  assert.throws(() => s.forSession("gone@example.com"), (error) => error.status === 409);
+});
+
 test("upsert accepts priority 0 so a new account can outrank the first", () => {
   const s = store();
   s.upsert({ email: "old@example.com", cookieHeader: "a=1", password: "p", priority: 1 });

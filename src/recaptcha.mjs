@@ -18,10 +18,12 @@ export class RecaptchaBroker {
     return typeof this.token === "string" && Date.now() - this.tokenAt < this.ttlMs;
   }
 
-  async get(cookieHeader, force = false) {
+  /** `credential` is the whole credential, not just its cookie header: the
+   *  Account is what selects the browser context now. */
+  async get(credential, force = false) {
     if (!force && this.isFresh()) return this.token;
     try {
-      this.token = await this.browser.freshRecaptchaToken(cookieHeader, this.siteKey);
+      this.token = await this.browser.freshRecaptchaToken(credential, this.siteKey);
       this.tokenAt = Date.now();
       this.generations += 1;
       this.lastError = null;

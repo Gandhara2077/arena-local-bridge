@@ -117,7 +117,11 @@ async function main() {
       try {
         const result = await bridge.browser.login(loginSecret.email, loginSecret.password);
         credentials.replaceCookie(result.email, result.cookieHeader);
-        await bridge.browser.close(); // force a fresh context with the new cookie
+        // No close() here any more. The new cookie changes that Account's
+        // credential signature, which marks its context stale; the next getPage
+        // rebuilds it — once that Account is idle, so a refresh can no longer
+        // kill the turn it was not meant to touch. (Closing the whole browser,
+        // as this used to, took every OTHER Account's work down with it.)
         log.info("refresh", "account verified and refreshed", { account: result.email });
         return result.email;
       } catch (error) {

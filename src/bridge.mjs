@@ -185,7 +185,9 @@ export class Bridge {
     // Warm up the browser and validate the credential early (fail fast).
     const credential = this.credentials.primary();
     if (!credential) throw new Error("arena-bridge: no credentials — run bin/login.mjs first");
-    await this.browser.getPage(credential.cookieHeader, credential.updatedAt);
+    // A warmup only: it must not hold a lease, or the context could never be
+    // rebuilt after that credential refreshes.
+    await this.browser.getPage(credential);
     log.info("bridge", "browser ready", {
       account: credential.email,
       cookieExpiry: this.credentials.expirySummary(credential),
@@ -279,9 +281,9 @@ export class Bridge {
    * default pick, which is what the session-creating flows want.
    */
   async #page(account = null) {
-    const credential = account || this.#credential();
-    return this.browser.getPage(credential.cookieHeader, credential.updatedAt);
+    return this.browser.getPage(account || this.#credential());
   }
+
 
   async createAgentSession(page, prompt) {
     await page.goto("https://arena.ai/agent", { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -1005,9 +1007,14 @@ export class Bridge {
   }
 
   async runAgent(body, headers) {
-    return this.#serialized(async () => {
+    // Resolved once, so the lease and the pages it protects always belong to the
+    // same Account.
+    const account = this.#credential();
+    // Held for the whole run, so a credential refresh mid-turn cannot rebuild
+    // the context underneath it.
+    return this.#serialized(() => this.browser.withAccount(account, async () => {
       this.#dump("last-request", JSON.stringify(body));
-      const page = await this.#page();
+      const page = await this.#page(account);
       const key = sessionKey(body, headers);
       const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
       const stateless = hasTools;
@@ -1112,7 +1119,7 @@ export class Bridge {
       }
       const content = textToolResult.content || (textToolResult.toolCalls ? "" : parsed.text || "(empty Agent response)");
       return this.makeCompletion(body.model || "agent", content, textToolResult.toolCalls, parsed.reasoning);
-    });
+    }));
   }
 
   /**
@@ -1191,7 +1198,7 @@ export class Bridge {
       return cached.payload;
     }
 
-    const work = this.#serialized(async () => {
+    const work = this.#serialized(() => this.browser.withAccount(account, async () => {
       // Fresh per-request dedupe ledger for the streaming channel (§4.33).
       this._emittedByNode = new Map();
       // Count what actually went out, so we can tell "no delta came from Arena"
@@ -1454,7 +1461,7 @@ export class Bridge {
       const content =
         parsed.text || (parsed.errorText ? `(Arena stream error: ${parsed.errorText})` : "(empty Agent response)");
       return this.makeCompletion(body.model || "agent", content, null, "");
-    });
+    }));
 
     this.inflight.set(inflightKey, work);
     const cleanup = () => this.inflight.delete(inflightKey);
@@ -1484,22 +1491,24 @@ export class Bridge {
    *   usd     — the probe's snapshot of the trace's cost spans. Only present
    *             once a run on this page has settled, so it is often absent.
    *
-   * Never touches another account: switching credential tears the shared
-   * browser context down, which would kill whatever turn is in flight.
+   * Never touches another account: each Account owns its context, so reading one
+   * Account's quota cannot disturb another Account's turn.
    */
   async quotaSnapshot() {
     const account = this.#credential();
-    const page = await this.#page(account);
-    const snap = await readSnapshot(page, { waitForModel: false });
-    return {
-      email: account.email,
-      percent: snap.percent,
-      percentSource: snap.percentSource,
-      usd: snap.usd,
-      usdStatus: snap.usdStatus,
-      error: snap.error,
-      checkedAt: new Date().toISOString(),
-    };
+    return this.browser.withAccount(account, async () => {
+      const page = await this.#page(account);
+      const snap = await readSnapshot(page, { waitForModel: false });
+      return {
+        email: account.email,
+        percent: snap.percent,
+        percentSource: snap.percentSource,
+        usd: snap.usd,
+        usdStatus: snap.usdStatus,
+        error: snap.error,
+        checkedAt: new Date().toISOString(),
+      };
+    });
   }
 
   healthPayload() {
@@ -1523,11 +1532,9 @@ export class Bridge {
       refresh: { lastLoginError: this.credentials.lastLoginError },
       recaptcha: this.recaptcha.status(),
       queue: { active: this.runtime.activeRequests, depth: this.runtime.queueDepth, maxDepth: this.config.maxQueue },
-      browser: {
-        launched: Boolean(this.browser.browser),
-        contextReady: Boolean(this.browser.context),
-        pageReady: Boolean(this.browser.page && !this.browser.page.isClosed()),
-      },
+      // One context per Account; `staleSince` says a refresh is waiting for that
+      // Account to go idle (see ArenaBrowser.snapshot).
+      browser: this.browser.snapshot(),
       stats: { ...this.runtime, averageLatencyMs },
     };
   }
