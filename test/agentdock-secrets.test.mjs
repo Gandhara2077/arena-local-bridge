@@ -12,8 +12,8 @@ import {
   readEndpointFile,
   readOrCreateToken,
   tokenFilePath,
-  writeSecretFile,
 } from "../src/agentdock.mjs";
+import { writeSecretFile } from "../src/secret.mjs";
 
 function tmp(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentdock-secrets-"));

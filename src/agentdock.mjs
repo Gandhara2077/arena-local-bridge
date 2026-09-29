@@ -8,6 +8,7 @@ import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import crypto from "node:crypto";
 import { log, maskTunnelUrl } from "./util.mjs";
+import { writeSecretFile, restrictSecretFile } from "./secret.mjs";
 
 // One regex, used only through `match` and `replace` — both of which reset
 // `lastIndex`, so the `/g` cannot drift between calls. `.test` / `.exec` would
@@ -82,20 +83,6 @@ export function openMaskedLog(file, onLine = () => {}) {
       });
     },
   };
-}
-
-// The bearer token and the public endpoint are secrets: holding both is enough
-// to read and write this machine's workspace through the tunnel. Same 0o600 the
-// credential store already applies to credentials.json — see the note in
-// test/agentdock.test.mjs about what that does and does not buy on Windows.
-// Same three steps the credential store uses (write a .tmp, rename over the
-// target, then chmod): `mode` only applies to a file this call creates, so
-// writing straight to an existing target would leave it at its old permissions.
-export function writeSecretFile(file, data) {
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, data, { mode: 0o600 });
-  fs.renameSync(tmp, file);
-  fs.chmodSync(file, 0o600);
 }
 
 function sleep(ms) {
@@ -194,11 +181,16 @@ export function readOrCreateToken(file) {
       const t = fs.readFileSync(file, "utf8").trim();
       if (t) {
         // An install that predates the 0o600 rule would keep its old permissions
-        // forever, because we only ever generate a token once.
+        // forever, because we only ever generate a token once. Tightening a file
+        // we did not create is best effort — refusing to read it would leave an
+        // existing install with no way to start — but it does not pass silently.
         try {
-          fs.chmodSync(file, 0o600);
-        } catch {
-          /* ignore */
+          restrictSecretFile(file);
+        } catch (error) {
+          log.error("agentdock", "token file is not owner-only and could not be fixed", {
+            file,
+            error: String(error?.message || error),
+          });
         }
         return t;
       }
@@ -206,11 +198,10 @@ export function readOrCreateToken(file) {
       /* generate below */
     }
     const t = crypto.randomBytes(32).toString("hex");
-    try {
-      writeSecretFile(file, t);
-    } catch {
-      /* ignore */
-    }
+    // A token that could not be written is not a token: every later call would
+    // generate a different one, and the tunnel would authenticate with
+    // something the MCP server never learned. Let this reach `start()`.
+    writeSecretFile(file, t);
     return t;
   }
   return crypto.randomBytes(32).toString("hex");
@@ -273,14 +264,14 @@ export class AgentDockManager {
     return readOrCreateToken(tokenFilePath(this.dataDir));
   }
 
+  // The published endpoint is a credential: it carries the bearer token that
+  // opens this machine's workspace. If it cannot be written owner-only, it is
+  // not written, and the caller tears the tunnel down instead of reporting a
+  // success the bridge cannot use (see start()).
   #publish(url, token) {
     if (!this.endpointFile) return;
     const payload = JSON.stringify({ url, token, started: new Date().toISOString() }, null, 2);
-    try {
-      writeSecretFile(this.endpointFile, payload);
-    } catch {
-      /* ignore */
-    }
+    writeSecretFile(this.endpointFile, payload);
   }
 
   #unpublish() {
@@ -405,7 +396,15 @@ export class AgentDockManager {
     this.url = url;
     this.#persistSpawned();
     const mcpUrl = `${url}/mcp`;
-    this.#publish(mcpUrl, token);
+    try {
+      this.#publish(mcpUrl, token);
+    } catch (error) {
+      // Half a tunnel is worse than none: the bridge would have no endpoint to
+      // inject, so stop the children and let the error reach the caller.
+      await this.stop();
+      this.lastError = String(error?.message || error);
+      throw error;
+    }
     // Never log the URL itself: its random subdomain is what makes the tunnel
     // unguessable, so a log line is a credential leak (logs get pasted around).
     log.info("agentdock", "public MCP bridge started", { url: maskTunnelUrl(mcpUrl) });
