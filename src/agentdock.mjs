@@ -102,6 +102,56 @@ export function pidsToStop({ tracked = [], persisted = [], paths = {}, selfPid =
   return out;
 }
 
+// The two credential-bearing files live ONLY in the data directory. The
+// install dir is a third-party tree: we neither write secrets into it nor read
+// legacy copies back out of it — two locations would mean two sources of
+// truth. Files an older version left behind in the install dir are ignored,
+// never migrated, never cleaned.
+export function tokenFilePath(dataDir) {
+  // No data directory configured ⇒ no file at all: a token is generated per
+  // process rather than landing in whatever directory happens to be around.
+  // (The pid file's `dataDir || dir` fallback must NOT be copied here — a
+  // credential file has no business falling back to a third-party directory.)
+  return dataDir ? path.join(dataDir, "auth-token.txt") : "";
+}
+
+export function readOrCreateToken(file) {
+  if (file) {
+    try {
+      const t = fs.readFileSync(file, "utf8").trim();
+      if (t) {
+        // An install that predates the 0o600 rule would keep its old permissions
+        // forever, because we only ever generate a token once.
+        try {
+          fs.chmodSync(file, 0o600);
+        } catch {
+          /* ignore */
+        }
+        return t;
+      }
+    } catch {
+      /* generate below */
+    }
+    const t = crypto.randomBytes(32).toString("hex");
+    try {
+      writeSecretFile(file, t);
+    } catch {
+      /* ignore */
+    }
+    return t;
+  }
+  return crypto.randomBytes(32).toString("hex");
+}
+
+export function readEndpointFile(file) {
+  if (!file) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export class AgentDockManager {
   constructor({ dir = "", dataDir = "", endpointFile = "" } = {}) {
     this.dir = String(dir || "").trim();
@@ -143,62 +193,30 @@ export class AgentDockManager {
   }
 
   #token() {
-    const file = path.join(this.dir, "auth-token.txt");
-    try {
-      const t = fs.readFileSync(file, "utf8").trim();
-      if (t) {
-        // An install that predates the 0o600 rule would keep its old permissions
-        // forever, because we only ever generate a token once.
-        try {
-          fs.chmodSync(file, 0o600);
-        } catch {
-          /* ignore */
-        }
-        return t;
-      }
-    } catch {
-      /* generate below */
-    }
-    const t = crypto.randomBytes(32).toString("hex");
-    try {
-      writeSecretFile(file, t);
-    } catch {
-      /* ignore */
-    }
-    return t;
+    return readOrCreateToken(tokenFilePath(this.dataDir));
   }
 
   #publish(url, token) {
+    if (!this.endpointFile) return;
     const payload = JSON.stringify({ url, token, started: new Date().toISOString() }, null, 2);
-    const targets = [path.join(this.dir, "mcp-endpoint.json"), this.endpointFile].filter(Boolean);
-    for (const t of targets) {
-      try {
-        writeSecretFile(t, payload);
-      } catch {
-        /* ignore */
-      }
+    try {
+      writeSecretFile(this.endpointFile, payload);
+    } catch {
+      /* ignore */
     }
   }
 
   #unpublish() {
-    const targets = [path.join(this.dir, "mcp-endpoint.json"), this.endpointFile].filter(Boolean);
-    for (const t of targets) {
-      try {
-        fs.rmSync(t, { force: true });
-      } catch {
-        /* ignore */
-      }
+    if (!this.endpointFile) return;
+    try {
+      fs.rmSync(this.endpointFile, { force: true });
+    } catch {
+      /* ignore */
     }
   }
 
   async status() {
-    const endpoint = (() => {
-      try {
-        return JSON.parse(fs.readFileSync(this.endpointFile || path.join(this.dir, "mcp-endpoint.json"), "utf8"));
-      } catch {
-        return null;
-      }
-    })();
+    const endpoint = readEndpointFile(this.endpointFile);
     return {
       installed: this.installed(),
       dir: this.dir,
