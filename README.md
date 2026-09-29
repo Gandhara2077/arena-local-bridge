@@ -117,6 +117,10 @@ The archive lands in `dist/` (~80 MB unpacked is ~106 MB, zipped ~36 MB; with Pl
 the bridge and opens the local UI; this is a Node application, so there is no single-file native `.exe` and no installer.
 Nothing in the archive downloads anything, and the browser it drives is still the one already on your machine.
 
+The archive is a **Windows** artifact today — that is the platform the release targets, and `start-gui.bat` is the only
+launcher it ships. The bridge itself runs anywhere Node does (`node src/index.mjs`, with `runtime/node` from the
+archive), so a macOS or Linux user can use one, but they are not the packaged path.
+
 ## API example
 
 Set a local bearer key first:

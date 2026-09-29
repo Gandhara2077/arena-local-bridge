@@ -88,3 +88,33 @@ export function detectBrowser({
   const tried = [...installed({ platform, env, homeDir }), ...playwrightCache({ platform, env, homeDir, readdir })];
   return { path: tried.find(exists) || "", tried };
 }
+
+// ── and refusing to ship one ────────────────────────────────────────────────
+//
+// The other half of the same knowledge. `bin/package-portable.mjs` has to
+// recognise a browser in a staged tree, and the first version of that check was
+// `/chrome\.exe$|headless_shell\.exe$|ms-playwright/` — which reads as "Windows
+// only": measured against the layouts below it missed four of the nine, every
+// one of them a non-`.exe` name outside the Playwright cache, including
+// `node_modules/playwright-core/.local-browsers/`, where a browser installed
+// with PLAYWRIGHT_BROWSERS_PATH=0 lives. So the match is on path segments,
+// either separator, over the same layouts the detection above knows about.
+const BROWSER_BINARY = /^(chrome|chromium|msedge|chrome-headless-shell|headless_shell)(\.exe)?$/i;
+// Directories a browser install creates — never a file name, and never a bare
+// `chrome` / `chromium`: playwright-core has `lib/server/chromium/` of its own,
+// which a segment-wide match on the binary names above turns into a false
+// refusal. What decides a browser install is the revision-numbered directory
+// Playwright writes, or the layout directory inside it.
+const BROWSER_DIRECTORY = /^(ms-playwright|\.local-browsers|chrome-(win|win64|linux|linux64|mac)|chromium([-_]?headless[_-]shell)?-\d+|(chromium|google chrome)\.app)$/i;
+
+/**
+ * Is this path part of a browser install — something the portable archive must
+ * not contain (ADR 0005)? Accepts any path, relative or absolute. The binary
+ * names only count as the file name; the directory names count anywhere on the
+ * path, since the whole install directory is what makes the archive big.
+ */
+export function isBrowserArtifact(file) {
+  const parts = String(file).replace(/\\/g, "/").split("/").filter(Boolean);
+  if (!parts.length) return false;
+  return BROWSER_BINARY.test(parts[parts.length - 1]) || parts.some((part) => BROWSER_DIRECTORY.test(part));
+}

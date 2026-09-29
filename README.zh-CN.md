@@ -115,6 +115,10 @@ npm run package:portable -- --node "C:\Program Files\nodejs"
 解压后双击 **`start-gui.bat`** —— 它是一个启动器：拉起 bridge 并打开本地界面。这是 Node 应用，
 没有单文件原生 exe，也没有安装程序；包内任何东西都不会联网下载，驱动的仍然是你机器上已有的浏览器。
 
+目前这个压缩包是 **Windows 产物** —— 这就是发行面向的平台，`start-gui.bat` 也是它唯一带的启动器。
+bridge 本身在 Node 能跑的地方都能跑（`node src/index.mjs`，可用包里的 `runtime/node`），
+所以 macOS / Linux 用户也能用，但那不是我们打好的那条路。
+
 ## API 示例
 
 首先设置本地 Bearer Key：

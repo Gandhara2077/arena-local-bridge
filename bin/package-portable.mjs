@@ -13,6 +13,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../src/version.mjs";
+import { isBrowserArtifact } from "../src/browser-detect.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -76,10 +77,25 @@ function walk(dir, out = []) {
 }
 
 const shipped = walk(stage);
-// The one thing this script exists to guarantee.
-const banned = shipped.filter((f) => /(^|[\\/])(chrome|headless_shell)\.exe$|ms-playwright/i.test(f));
+// The first thing this script exists to guarantee. Matched relative to the
+// staged tree, so the directory the user picked (--out, cwd) cannot make a
+// legitimate file look like a browser or hide one (see isBrowserArtifact).
+const banned = shipped.filter((f) => isBrowserArtifact(path.relative(stage, f)));
 if (banned.length) {
-  console.error(`Refusing to ship a browser (ADR 0005): ${banned.slice(0, 5).join(", ")}`);
+  console.error(`Refusing to ship a browser (ADR 0005): ${banned.slice(0, 5).map((f) => path.relative(stage, f)).join(", ")}`);
+  process.exit(1);
+}
+
+// The second one, under it. Matching names only catches the layouts somebody
+// thought of, so the size is the net that catches the rest: an archive this
+// small cannot hold a browser whatever it is called. Reported with the biggest
+// files, because "400 MB of something" is not actionable on its own.
+const LIMIT_MB = 250;
+const sizes = shipped.map((f) => ({ f, mb: fs.statSync(f).size / 1024 / 1024 }));
+const stagedMb = sizes.reduce((total, s) => total + s.mb, 0);
+if (stagedMb > LIMIT_MB) {
+  const biggest = sizes.sort((a, b) => b.mb - a.mb).slice(0, 5).map((s) => `${s.mb.toFixed(0)} MB  ${path.relative(stage, s.f)}`);
+  console.error(`Refusing to ship ${stagedMb.toFixed(0)} MB unpacked (limit ${LIMIT_MB} MB, ADR 0005). Biggest files:\n  ${biggest.join("\n  ")}`);
   process.exit(1);
 }
 
@@ -107,6 +123,9 @@ fs.rmSync(stage, { recursive: true, force: true });
 
 const mb = fs.statSync(zip).size / 1024 / 1024;
 console.log(`\n${zip}`);
-console.log(`${mb.toFixed(1)} MB · ${shipped.length} files · no browser bundled.`);
-console.log("To use it: unzip, double-click start-gui.bat (it prefers the bundled runtime/node).");
-if (mb > 200) console.warn("WARNING: expected ~80 MB — check whether a browser crept in.");
+console.log(`${mb.toFixed(1)} MB zipped · ${stagedMb.toFixed(0)} MB unpacked · ${shipped.length} files · no browser bundled.`);
+console.log(
+  process.platform === "win32"
+    ? "To use it: unzip, double-click start-gui.bat (it prefers the bundled runtime/node)."
+    : "The launcher in this archive (start-gui.bat) is Windows-only, which is what this release targets; here, start it with runtime/node src/index.mjs."
+);
