@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateCompletion, RateLimiter, exposesBridgeKey, sessionDriver } from "../src/server.mjs";
+import { validateCompletion, RateLimiter, exposesBridgeKey, sessionDriver, runReprobe } from "../src/server.mjs";
 
 // A Session's Model may only ever be attributed through its OWN Account. The
 // pool also has a default pick, and the two are routinely different Accounts —
@@ -35,6 +35,84 @@ test("sessionDriver: an unusable owner surfaces its 409 instead of degrading", (
   // Falling back to the primary here would turn "this Session has no usable
   // Account" into "attribute some other Account's Model to it".
   assert.throws(() => sessionDriver(fakeCredentials({ ownerUsable: false }), OWNER.email), /session_account_unavailable/);
+});
+
+// ── the whole reprobe, driven against a fake bridge ─────────────────────────
+//
+// This is the test the earlier version was missing: it asserts the turn and the
+// probe read are the SAME Account, which is the thing that was actually wrong.
+// `readSnapshot` runs for real against a fake page, so the page is the only
+// stand-in.
+
+const FAKE_PAGE = {
+  // readSnapshot evaluates twice over: a one-arg origin check, then the two-arg
+  // readInPage. Tell them apart by arity rather than by call order.
+  evaluate: async (fn, opts) => (opts === undefined ? true : { model: "gpt-5-pro", percent: 7 }),
+  goto: async () => {},
+};
+
+function reprobeBridge({ turnFails = false, seen = [] } = {}) {
+  return {
+    credentials: fakeCredentials(),
+    browser: {
+      withAccount: async (credential, fn) => {
+        seen.push(`lease:${credential?.email}`);
+        return fn();
+      },
+      getPage: async (credential) => {
+        seen.push(`page:${credential?.email}`);
+        return FAKE_PAGE;
+      },
+    },
+    converse: async (id, body, options) => {
+      seen.push(`turn:${options.account?.email}`);
+      if (turnFails) throw new Error("turn died");
+    },
+  };
+}
+
+test("runReprobe: one Account drives both the turn and the probe read", async () => {
+  const seen = [];
+  const { found, failure } = await runReprobe({
+    bridge: reprobeBridge({ seen }),
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    prompt: "ping",
+  });
+  assert.equal(failure, null);
+  assert.equal(found.model, "gpt-5-pro");
+  // The owner in all three places, and the primary nowhere — this is what used
+  // to break: `turn:owner` followed by `page:primary`.
+  assert.deepEqual(seen, [`lease:${OWNER.email}`, `turn:${OWNER.email}`, `page:${OWNER.email}`]);
+  assert.equal(seen.some((entry) => entry.includes(PRIMARY.email)), false);
+});
+
+test("runReprobe: a failed turn does not read, so no stale Model can be archived", async () => {
+  const seen = [];
+  const { found, failure } = await runReprobe({
+    bridge: reprobeBridge({ turnFails: true, seen }),
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    prompt: "ping",
+  });
+  assert.match(failure, /turn died/);
+  assert.equal(found, null);
+  assert.equal(seen.some((entry) => entry.startsWith("page:")), false);
+});
+
+test("runReprobe: an unusable owner reports the failure and reads nothing", async () => {
+  const bridge = reprobeBridge({ seen: [] });
+  bridge.credentials.forSession = () => {
+    throw Object.assign(new Error("session_account_unavailable"), { status: 409 });
+  };
+  const { found, failure } = await runReprobe({
+    bridge,
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    prompt: "ping",
+  });
+  assert.match(failure, /session_account_unavailable/);
+  assert.equal(found, null);
 });
 
 test("validateCompletion accepts a valid request", () => {
