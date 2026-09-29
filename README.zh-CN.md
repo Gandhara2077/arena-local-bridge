@@ -54,7 +54,8 @@ Bridge 默认绑定到 127.0.0.1，并提供：
 
 - Node.js **20+**
 - 你有权使用的 Arena.ai 账号
-- 主机能够运行 Chromium / Playwright
+- 主机上有一个 Chromium 内核浏览器 —— **Chrome 或 Edge 就够**。启动时会自动探测；
+  Playwright 自带的 Chromium 只是兜底，不是必需项
 
 本项目面向你自己的**账号**。它不提供 Arena API Key，也不绕过账号认证。
 
@@ -65,6 +66,8 @@ git clone https://github.com/Gandhara2077/arena-local-bridge.git
 cd arena-local-bridge
 
 npm install
+
+# 只有当你既没有 Chrome 也没有 Edge 时才需要这一行 —— 见下面「浏览器」
 npx playwright install chromium
 
 node bin/login.mjs --email you@example.com --password 'your-password'
@@ -88,6 +91,33 @@ start-gui.bat
 ~~~
 
 详细的 Agent 工作流见 [SKILL.md](SKILL.md)。
+
+## 浏览器
+
+启动时依次探测**本机已装**的 Chrome → Edge → Playwright 之前下载过的 Chromium，找到就用它。要指定某一个：
+
+~~~bash
+export ARENA_AGENT_CHROME="C:\Program Files\Google\Chrome\Application\chrome.exe"   # Windows
+export ARENA_AGENT_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"   # macOS
+~~~
+
+一个都没找到时，bridge 会说明它找过哪些位置然后停下，**不会**替你下载浏览器。
+
+## 便携发行（不含 Chromium）
+
+给没有装 Node 的机器，可以打一个自包含压缩包（应用 + Node 运行时 + 启动器）：
+
+~~~bash
+npm run package:portable -- --node "C:\Program Files\nodejs"
+~~~
+
+产物在 `dist/`（解压后约 106 MB、压缩后约 36 MB；若把 Playwright 的 Chromium 打进去会是 350–700 MB，这就是不打的原因）。
+解压后双击 **`start-gui.bat`** —— 它是一个启动器：拉起 bridge 并打开本地界面。这是 Node 应用，
+没有单文件原生 exe，也没有安装程序；包内任何东西都不会联网下载，驱动的仍然是你机器上已有的浏览器。
+
+目前这个压缩包是 **Windows 产物** —— 这就是发行面向的平台，`start-gui.bat` 也是它唯一带的启动器。
+bridge 本身在 Node 能跑的地方都能跑（`node src/index.mjs`，可用包里的 `runtime/node`），
+所以 macOS / Linux 用户也能用，但那不是我们打好的那条路。
 
 ## API 示例
 

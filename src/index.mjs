@@ -15,6 +15,7 @@ import { RecaptchaBroker } from "./recaptcha.mjs";
 import { createServer } from "./server.mjs";
 import { log } from "./util.mjs";
 import { requireSecret, restrictSecretFile, writeSecretFile } from "./secret.mjs";
+import { detectBrowser } from "./browser-detect.mjs";
 import { VERSION } from "./version.mjs";
 
 const STARTED_AT = Date.now();
@@ -70,6 +71,16 @@ async function main() {
   const checks = [];
   if (config.chromePath && !fs.existsSync(config.chromePath)) {
     checks.push(`chromium binary not found at ${config.chromePath} (set ARENA_AGENT_CHROME)`);
+  }
+  if (!config.chromePath) {
+    const { tried } = detectBrowser({ env: mergedEnv });
+    checks.push(
+      "no Chromium-based browser found (looked for Chrome, Edge and Playwright's own cache: " +
+        `${tried.join(", ") || "nothing to look at on this platform"}). ` +
+        "This project does not download one for you — install Chrome or Edge, or point at one with " +
+        'ARENA_AGENT_CHROME (start-gui.bat passes it through), e.g. ' +
+        'ARENA_AGENT_CHROME="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe".'
+    );
   }
   if (!fs.existsSync(config.dataDir)) {
     checks.push(`DATA_DIR does not exist: ${config.dataDir}`);

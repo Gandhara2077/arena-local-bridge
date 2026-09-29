@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { detectBrowser } from "./browser-detect.mjs";
 
 export function loadDotEnv(envPath) {
   const out = {};
@@ -47,7 +48,10 @@ export function loadConfig(env = {}, { requireBridgeKey = true } = {}) {
     host,
     port,
     bridgeKey,
-    chromePath: env.ARENA_AGENT_CHROME || "",
+    // ADR 0005 — the portable release ships no Chromium, so a browser already
+    // on this machine is the first choice. ARENA_AGENT_CHROME still wins: it is
+    // the manual entry for when we looked in the wrong places.
+    chromePath: env.ARENA_AGENT_CHROME || detectBrowser({ env }).path,
     proxy,
     recaptchaSiteKey:
       env.ARENA_RECAPTCHA_SITE_KEY || "6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0",

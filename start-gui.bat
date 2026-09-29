@@ -2,6 +2,8 @@
 chcp 65001 >nul
 setlocal
 set "NODE=node"
+REM Portable archive: use the bundled runtime if one was shipped (ADR 0005).
+if exist "%~dp0runtime\node.exe" set "NODE=%~dp0runtime\node.exe"
 if defined ARENA_NODE_PATH set "NODE=%ARENA_NODE_PATH%"
 set "ARENA_HEADED=1"
 set "DATA_DIR=%~dp0.arena-gui"

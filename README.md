@@ -54,7 +54,8 @@ The bridge binds to 127.0.0.1 by default and exposes:
 
 - Node.js **20+**
 - An Arena.ai account that you are authorized to use
-- Chromium/Playwright support on the host
+- A Chromium-based browser on the host — **Chrome or Edge is enough**. The bridge detects one on startup;
+  Playwright's own Chromium is only a fallback, not a requirement
 
 The project is intended for your **own account**. It does not provide an Arena API key or bypass account authentication.
 
@@ -65,6 +66,8 @@ git clone https://github.com/Gandhara2077/arena-local-bridge.git
 cd arena-local-bridge
 
 npm install
+
+# Only needed if you have neither Chrome nor Edge — see "Browser" below.
 npx playwright install chromium
 
 node bin/login.mjs --email you@example.com --password 'your-password'
@@ -88,6 +91,35 @@ start-gui.bat
 ~~~
 
 See [SKILL.md](SKILL.md) for the detailed agent-oriented workflow.
+
+## Browser
+
+On startup the bridge looks for a Chromium-based browser that is **already installed** — Chrome first, then Edge,
+then one Playwright may have downloaded earlier — and uses that. Point at a specific one with:
+
+~~~bash
+export ARENA_AGENT_CHROME="C:\Program Files\Google\Chrome\Application\chrome.exe"   # Windows
+export ARENA_AGENT_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"   # macOS
+~~~
+
+If nothing is found the bridge says where it looked and stops. It never downloads a browser on your behalf.
+
+## Portable release (no Chromium)
+
+For a machine without a Node install, build a self-contained archive — the app, a Node runtime and the launcher:
+
+~~~bash
+npm run package:portable -- --node "C:\Program Files\nodejs"
+~~~
+
+The archive lands in `dist/` (~80 MB unpacked is ~106 MB, zipped ~36 MB; with Playwright's Chromium inside it would be
+350–700 MB, which is why there is none). Unzip it and double-click **`start-gui.bat`** — that is a launcher that starts
+the bridge and opens the local UI; this is a Node application, so there is no single-file native `.exe` and no installer.
+Nothing in the archive downloads anything, and the browser it drives is still the one already on your machine.
+
+The archive is a **Windows** artifact today — that is the platform the release targets, and `start-gui.bat` is the only
+launcher it ships. The bridge itself runs anywhere Node does (`node src/index.mjs`, with `runtime/node` from the
+archive), so a macOS or Linux user can use one, but they are not the packaged path.
 
 ## API example
 
