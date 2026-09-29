@@ -16,7 +16,8 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "package:portable": "node bin/package-portable.mjs"
   },
   "dependencies": {
     "playwright": "^1.63.0"

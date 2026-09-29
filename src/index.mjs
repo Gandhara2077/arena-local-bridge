@@ -15,6 +15,7 @@ import { RecaptchaBroker } from "./recaptcha.mjs";
 import { createServer } from "./server.mjs";
 import { log } from "./util.mjs";
 import { requireSecret } from "./secret.mjs";
+import { detectBrowser } from "./browser-detect.mjs";
 import { VERSION } from "./version.mjs";
 
 const STARTED_AT = Date.now();
@@ -45,6 +46,19 @@ async function main() {
   const checks = [];
   if (config.chromePath && !fs.existsSync(config.chromePath)) {
     checks.push(`chromium binary not found at ${config.chromePath} (set ARENA_AGENT_CHROME)`);
+  }
+  // ADR 0005 — nothing was found on this machine, and downloading a browser
+  // behind the user's back is exactly what that decision refuses to do. Say
+  // where we looked and hand over the manual entry.
+  if (!config.chromePath) {
+    const { tried } = detectBrowser({ env: mergedEnv });
+    checks.push(
+      "no Chromium-based browser found (looked for Chrome, Edge and Playwright's own cache: " +
+        `${tried.join(", ") || "nothing to look at on this platform"}). ` +
+        "This project does not download one for you — install Chrome or Edge, or point at one with " +
+        'ARENA_AGENT_CHROME (start-gui.bat passes it through), e.g. ' +
+        'ARENA_AGENT_CHROME="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe".'
+    );
   }
   if (!fs.existsSync(config.dataDir)) {
     checks.push(`DATA_DIR does not exist: ${config.dataDir}`);

@@ -5,6 +5,9 @@
 node_modules/
 .arena-*/
 .arena-bridge/
+
+# 便携发行产物（bin/package-portable.mjs 的输出）
+dist/
 .env
 .env.*
 !.env.example
