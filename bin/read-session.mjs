@@ -29,7 +29,7 @@ try {
   await bridge.start();
   // Drive the Session with the Account that created it — see credentials.forSession.
   const credential = credentials.forSession(sessionAccountEmail(config.archiveDir, targetId));
-  const page = await bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
+  const page = await bridge.browser.getPage(credential);
   // go to the session page and refresh the public token
   await page.goto(`https://arena.ai/agent/${targetId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForTimeout(3_000);

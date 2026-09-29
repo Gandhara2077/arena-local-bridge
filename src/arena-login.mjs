@@ -139,9 +139,23 @@ export class ArenaBrowser {
   }
 
   /**
-   * A page for `credential`'s Account. Leases are not taken here — see acquire().
+   * A page for `credential`'s Account. No lease is taken here — see withAccount().
    */
   async getPage(credential = null) {
+    // A bare cookie header is the shape of a call site left on the old
+    // (cookieHeader, updatedAt) signature — and every field this method reads
+    // would come back undefined, so it would quietly drive an ANONYMOUS,
+    // unauthenticated context instead of failing. Say so instead. `null` stays
+    // allowed: that is the deliberate "no Account yet" path, not a mistake.
+    // The Account is the identity of a context, so a credential without an
+    // `email` cannot address one — `{}` or an array would land on the same
+    // anonymous context as a bare string, just less obviously.
+    if (credential !== null && (typeof credential !== "object" || !String(credential.email || "").trim())) {
+      throw new TypeError(
+        "ArenaBrowser.getPage() takes one credential object with an email " +
+          "({ email, cookieHeader, updatedAt }); a bare cookie header belongs to the previous signature."
+      );
+    }
     const account = String(credential?.email || "");
     const cookieHeader = String(credential?.cookieHeader || "");
     const signature = String(credential?.updatedAt || "");

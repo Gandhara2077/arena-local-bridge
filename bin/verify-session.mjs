@@ -50,7 +50,7 @@ try {
   out.cookie = { expirySeconds: secs, valid: secs === null || secs > 0 };
 
   // 2) open the session page under the account
-  const page = await browser.getPage(credential.cookieHeader, credential.updatedAt);
+  const page = await browser.getPage(credential);
   await page.goto(`https://arena.ai/agent/${targetId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForTimeout(4_000);
   out.page = {
@@ -67,7 +67,7 @@ try {
   if (probe) {
     const bridge = new Bridge({ config, credentials, recaptcha: null });
     await bridge.start();
-    const bpage = await bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
+    const bpage = await bridge.browser.getPage(credential);
     const state = { id: targetId, token: "", lastNodeId: null, requiresReview: false, toolsInitialized: false, updatedAt: Date.now() };
     await bpage.goto(`https://arena.ai/agent/${targetId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await bridge.appendAgentMessage(bpage, state, probe);

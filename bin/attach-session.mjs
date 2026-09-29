@@ -40,7 +40,7 @@ try {
   await bridge.start();
   // Drive the Session with the Account that created it — see credentials.forSession.
   const credential = credentials.forSession(sessionAccountEmail(config.archiveDir, targetId));
-  const page = await bridge.browser.getPage(credential.cookieHeader, credential.updatedAt);
+  const page = await bridge.browser.getPage(credential);
   const state = {
     id: targetId,
     token: "",

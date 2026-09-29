@@ -34,6 +34,42 @@ test("contextAction: a stale context in use is left alone", () => {
   assert.equal(contextAction({ hasContext: true, dirty: true, leases: 1 }), "reuse-stale");
 });
 
+// ── the argument contract ───────────────────────────────────────────────────
+
+// getPage() used to take (cookieHeader, updatedAt). A call site left on that
+// signature reaches the new implementation with a bare string, and every field
+// it reads comes back undefined — so it would quietly drive an ANONYMOUS context
+// instead of the Account's. Rejecting the shape here makes the miss loud.
+test("getPage: rejects a bare cookie header instead of quietly going anonymous", async () => {
+  const browser = browserWithFake();
+  await assert.rejects(
+    browser.getPage("arena-auth-prod-v1=abc", "2026-01-01T00:00:00Z"),
+    (error) => {
+      assert.ok(error instanceof TypeError, `expected a TypeError, got ${error}`);
+      assert.match(error.message, /credential object/);
+      return true;
+    }
+  );
+  assert.equal(browser.browser.contexts.length, 0, "拒绝之后不得顺手建出一个匿名 context");
+});
+
+test("getPage: any shape without an Account identity is rejected", async () => {
+  const browser = browserWithFake();
+  // A partially migrated call ({ cookieHeader, updatedAt } but no email) would
+  // land on the same anonymous context as a bare string, so it has to fail too.
+  const bad = [42, true, "arena-auth-prod-v1=abc", [], {}, { cookieHeader: "a=1", updatedAt: "now" }, { email: "  " }];
+  for (const value of bad) {
+    await assert.rejects(browser.getPage(value), TypeError, `should reject ${JSON.stringify(value)}`);
+  }
+});
+
+test("getPage: an explicit no-credential call is still allowed", async () => {
+  // `null` is the deliberate "no Account yet" path, not a mistaken call.
+  const browser = browserWithFake();
+  assert.ok(await browser.getPage(null));
+  assert.ok(await browser.getPage());
+});
+
 // ── the orchestration ───────────────────────────────────────────────────────
 
 function fakeBrowser() {
