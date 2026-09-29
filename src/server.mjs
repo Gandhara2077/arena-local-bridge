@@ -69,24 +69,6 @@ function noActiveSessionError() {
 }
 
 /**
- * Which Account drives a Session? Its OWNER — never the pool's default pick.
- *
- * The two are resolved separately, and a Session whose owner is not the primary
- * does not care what the primary is. Substituting the primary was a real bug: a
- * reprobe ran its turn as the owner, then read the probe as the primary, and
- * wrote the primary's last Model into the owner's Session.
- *
- * The lookup is deliberately not wrapped in a fallback. `forSession` throws when
- * the owner exists but cannot be used, and that has to reach the caller as the
- * 409 it is rather than quietly degrade into "use whoever is primary".
- */
-export function sessionDriver(credentials, ownerEmail) {
-  const owner = String(ownerEmail || "").trim();
-  if (!owner) return null;
-  return credentials.forSession(owner);
-}
-
-/**
  * 补标 — drive one real turn to make the probe learn a Model, then read the
  * probe and hand the Model back for archiving.
  *
@@ -97,6 +79,11 @@ export function sessionDriver(credentials, ownerEmail) {
  * Model into this Session — which is why the two steps are inseparable here
  * rather than a line apart at the call site.
  *
+ * `forSession` is used directly, with no wrapper: it already owns this policy —
+ * the owner wins, an owner-less (legacy) Session falls back to the pool's
+ * primary, and an owner that cannot be used is a 409. A wrapper here that
+ * restated that policy is exactly where it got restated wrong once.
+ *
  * A failed turn skips the read: nothing new ran, so the only thing a read could
  * return is the previous run's Model.
  *
@@ -105,9 +92,10 @@ export function sessionDriver(credentials, ownerEmail) {
  */
 export async function runReprobe({ bridge, sessionId, accountEmail, prompt }) {
   try {
-    // An unusable owner is reported, never swapped for the primary — and the
-    // report keeps the shape the endpoint already answered with.
-    const account = sessionDriver(bridge.credentials, accountEmail);
+    // The Session's owner — or the pool's primary when the archive has none
+    // (legacy records predate the Email column). An owner that cannot be used
+    // throws, and the report keeps the shape the endpoint already answered with.
+    const account = bridge.credentials.forSession(accountEmail);
     const found = await bridge.browser.withAccount(account, async () => {
       await bridge.converse(
         sessionId,

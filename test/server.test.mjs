@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateCompletion, RateLimiter, exposesBridgeKey, sessionDriver, runReprobe } from "../src/server.mjs";
+import { validateCompletion, RateLimiter, exposesBridgeKey, runReprobe } from "../src/server.mjs";
 
 // A Session's Model may only ever be attributed through its OWN Account. The
 // pool also has a default pick, and the two are routinely different Accounts —
@@ -9,33 +9,21 @@ import { validateCompletion, RateLimiter, exposesBridgeKey, sessionDriver, runRe
 const PRIMARY = { email: "primary@example.com", cookieHeader: "arena-auth-prod-v1=p" };
 const OWNER = { email: "owner@example.com", cookieHeader: "arena-auth-prod-v1=o" };
 
+// Mirrors CredentialStore.forSession: an owner wins, an owner-less (legacy)
+// Session falls back to the primary, and an unusable owner throws. The fake
+// keeps that shape on purpose — the policy itself is tested against the real
+// store in test/credentials.test.mjs.
 function fakeCredentials({ ownerUsable = true } = {}) {
   return {
     primary: () => PRIMARY,
     forSession: (email) => {
+      const owner = String(email || "").trim();
+      if (!owner) return PRIMARY;
       if (!ownerUsable) throw Object.assign(new Error("session_account_unavailable"), { status: 409 });
-      return email === OWNER.email ? OWNER : null;
+      return owner === OWNER.email ? OWNER : PRIMARY;
     },
   };
 }
-
-test("sessionDriver: drives by the Session's owner, never the pool's primary", () => {
-  const driver = sessionDriver(fakeCredentials(), OWNER.email);
-  assert.equal(driver, OWNER);
-  assert.notEqual(driver, PRIMARY);
-});
-
-test("sessionDriver: an unknown owner is null, not the primary", () => {
-  assert.equal(sessionDriver(fakeCredentials(), ""), null);
-  assert.equal(sessionDriver(fakeCredentials(), undefined), null);
-  assert.equal(sessionDriver(fakeCredentials(), "   "), null);
-});
-
-test("sessionDriver: an unusable owner surfaces its 409 instead of degrading", () => {
-  // Falling back to the primary here would turn "this Session has no usable
-  // Account" into "attribute some other Account's Model to it".
-  assert.throws(() => sessionDriver(fakeCredentials({ ownerUsable: false }), OWNER.email), /session_account_unavailable/);
-});
 
 // ── the whole reprobe, driven against a fake bridge ─────────────────────────
 //
@@ -85,6 +73,23 @@ test("runReprobe: one Account drives both the turn and the probe read", async ()
   // to break: `turn:owner` followed by `page:primary`.
   assert.deepEqual(seen, [`lease:${OWNER.email}`, `turn:${OWNER.email}`, `page:${OWNER.email}`]);
   assert.equal(seen.some((entry) => entry.includes(PRIMARY.email)), false);
+});
+
+test("runReprobe: an owner-less (legacy) Session uses the primary for BOTH steps", async () => {
+  // 记录.json entries written before the Email column have no owner. The turn
+  // and the probe read must still agree — falling back to the primary in one
+  // step while the other ran against an empty account is the same mismatch that
+  // made the reprobe attribute the wrong Model.
+  const seen = [];
+  const { found, failure } = await runReprobe({
+    bridge: reprobeBridge({ seen }),
+    sessionId: "s-legacy",
+    accountEmail: "",
+    prompt: "ping",
+  });
+  assert.equal(failure, null);
+  assert.equal(found.model, "gpt-5-pro");
+  assert.deepEqual(seen, [`lease:${PRIMARY.email}`, `turn:${PRIMARY.email}`, `page:${PRIMARY.email}`]);
 });
 
 test("runReprobe: a failed turn does not read, so no stale Model can be archived", async () => {
