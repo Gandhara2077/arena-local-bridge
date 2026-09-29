@@ -341,10 +341,15 @@ export function createServer({ bridge, config }) {
 
     // ── GUI (local, unauthenticated) ───────────────────────────────────────
     // The web GUI is the entry point for picking an archived Arena session and
-    // surfacing the local API/proxy URLs. It runs on 127.0.0.1 only and exposes
-    // nothing secret beyond the local base URL + the user's own session list,
-    // so it is intentionally served without the bridge key (the chat API and
-    // /recaptcha below stay behind the key).
+    // surfacing the local API/proxy URLs. These routes are served WITHOUT the
+    // bridge key (the chat API and /recaptcha below stay behind it).
+    //
+    // They are not free of secrets, though: /api/status among them hands the key
+    // out, because the GUI has no other way to show it to the user who has to
+    // paste it into a client. What makes that acceptable is the request check
+    // above, not an absence of secrets — a foreign Host or Origin is answered
+    // 403, so only this machine's own processes get a reply, and those can read
+    // DATA_DIR/.env (where the key comes from) anyway. See ADR 0004.
     if (url.pathname === "/" || url.pathname === "/gui") {
       try {
         const html = fs.readFileSync(path.join(__dirname, "gui.html"), "utf8");
