@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { deriveKey, encrypt, decrypt } from "./crypto.mjs";
 import { secondsToExpiry } from "./cookie.mjs";
 import { log, maskEmail } from "./util.mjs";
+import { writeSecretFile } from "./secret.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -32,12 +33,7 @@ export class CredentialStore {
   }
 
   save() {
-    const tmp = `${this.filePath}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, accounts: this.accounts }, null, 2), {
-      mode: 0o600,
-    });
-    fs.renameSync(tmp, this.filePath);
-    fs.chmodSync(this.filePath, 0o600);
+    writeSecretFile(this.filePath, JSON.stringify({ version: 1, accounts: this.accounts }, null, 2));
   }
 
   /** Ensure credentials exist: migrate from omni (opt-in), otherwise a clear error. */

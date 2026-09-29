@@ -287,7 +287,7 @@ configuration is refused), and the bridge data directory is denied regardless.
 The bridge handles highly sensitive local data because it stores Arena authentication state.
 
 - Credentials are encrypted at rest with AES-256-GCM.
-- Credential files are written with restrictive file permissions where supported.
+- Credential files are written owner-only: mode `0600` on POSIX, and via `icacls` on Windows (which has no POSIX mode bits, so this is the only mechanism that works there). A secret is written owner-only **or not written at all** — if the permissions cannot be set, the write fails instead of leaving a file the documentation calls private and the filesystem does not.
 - The HTTP service binds to 127.0.0.1 by default.
 - Runtime state, cookies, credentials, .env files and tunnel metadata are excluded by .gitignore.
 - Do **not** expose the local HTTP port to an untrusted network.
