@@ -72,9 +72,6 @@ async function main() {
   if (config.chromePath && !fs.existsSync(config.chromePath)) {
     checks.push(`chromium binary not found at ${config.chromePath} (set ARENA_AGENT_CHROME)`);
   }
-  // ADR 0005 — nothing was found on this machine, and downloading a browser
-  // behind the user's back is exactly what that decision refuses to do. Say
-  // where we looked and hand over the manual entry.
   if (!config.chromePath) {
     const { tried } = detectBrowser({ env: mergedEnv });
     checks.push(

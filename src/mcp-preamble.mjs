@@ -24,6 +24,25 @@ export function workspaceFromHeaders(headers) {
   return absolute ? raw : "";
 }
 
+/**
+ * Whether a session gets the local-capability preamble right now, and why.
+ * The seam ticket 14 asked for: the state question ("may I inject again?")
+ * without touching the filesystem, so it can be reasoned about on its own.
+ *
+ * `injected` is what we last told this session ("" = never), `endpoint` is the
+ * fingerprint of the endpoint now standing up ("" = no tunnel). Same
+ * fingerprint means "already told" — that is the once-per-session guard. A
+ * changed fingerprint must re-inject, because a new tunnel means new URL and
+ * token and the old line is dead. `force` is the manual entry.
+ */
+export function injectionPlan({ injected = "", endpoint = "", force = false } = {}) {
+  if (!endpoint) return { inject: false, reason: "no local endpoint is up" };
+  if (force) return { inject: true, reason: "manual re-injection requested" };
+  if (!injected) return { inject: true, reason: "first injection into this session" };
+  if (injected === endpoint) return { inject: false, reason: "already injected into this session" };
+  return { inject: true, reason: "local endpoint changed since the last injection" };
+}
+
 export function mcpPreamble({ url, token, workspace = "" }) {
   const ws = String(workspace || "").trim();
   const lines = [
