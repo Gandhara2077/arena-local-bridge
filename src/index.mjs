@@ -14,7 +14,7 @@ import { Bridge } from "./bridge.mjs";
 import { RecaptchaBroker } from "./recaptcha.mjs";
 import { createServer } from "./server.mjs";
 import { log } from "./util.mjs";
-import { requireSecret } from "./secret.mjs";
+import { requireSecret, restrictSecretFile, writeSecretFile } from "./secret.mjs";
 import { detectBrowser } from "./browser-detect.mjs";
 import { VERSION } from "./version.mjs";
 
@@ -35,11 +35,36 @@ async function main() {
   });
 
   // 2. Provision a local encryption key (so credentials are encrypted at rest)
+  //
+  // Through writeSecretFile, not appendFileSync + a later chmod/icacls: appending
+  // first and tightening after leaves the key in a file that could not be made
+  // owner-only — the write succeeds, the ACL fails, the boot aborts, and the key
+  // is on disk for anyone the directory allows. That is exactly the "written
+  // owner-only or not written at all" the docs promise, so the key goes in the
+  // same way every other secret does: unique tmp, restricted before the key is
+  // in it, renamed over the target. A failure at any step leaves nothing.
+  //
+  // An existing .env is rewritten as its own content plus this line, which is
+  // also how a copy left by an older version gets tightened.
   if (!dotEnv.STORAGE_ENCRYPTION_KEY) {
     const key = crypto.randomBytes(32).toString("hex");
-    fs.appendFileSync(config.envPath, `\nSTORAGE_ENCRYPTION_KEY=${key}\n`, { mode: 0o600 });
+    const existing = fs.existsSync(config.envPath) ? fs.readFileSync(config.envPath, "utf8") : "";
+    writeSecretFile(config.envPath, `${existing}\nSTORAGE_ENCRYPTION_KEY=${key}\n`);
     dotEnv.STORAGE_ENCRYPTION_KEY = key;
     log.info("boot", "generated STORAGE_ENCRYPTION_KEY and wrote to " + config.envPath);
+  } else {
+    // A .env that was already here: tighten it, since a version before this one
+    // left it under whatever the directory allows. Best effort — refusing to
+    // start would leave an existing install with no way in — but it must not
+    // pass quietly. (A .env this boot writes above is owner-only already, or
+    // there is no .env at all.)
+    try {
+      restrictSecretFile(config.envPath);
+    } catch (error) {
+      log.error("boot", String(error?.message || error), {
+        hint: "move DATA_DIR somewhere only you can read, or fix the ACL of that file",
+      });
+    }
   }
 
   // 3. Self-checks (fail fast with precise messages)
