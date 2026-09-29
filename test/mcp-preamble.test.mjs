@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mcpPreamble, workspaceFromHeaders, WORKSPACE_HEADER } from "../src/mcp-preamble.mjs";
+import { mcpPreamble, injectionPlan, workspaceFromHeaders, WORKSPACE_HEADER } from "../src/mcp-preamble.mjs";
 
 const URL = "https://example.trycloudflare.com/mcp";
 const TOKEN = "abc123";
@@ -73,4 +73,35 @@ test("it stays short enough not to raise the reCAPTCHA risk", () => {
   // not a manual: long first messages raise Arena's reCAPTCHA risk.
   assert.ok(text.length < 900, `preamble is ${text.length} chars`);
   assert.ok(text.split("\n").length <= 14);
+});
+
+// Ticket 14's seam: whether a session may be injected again, decided without
+// touching the filesystem.
+describe("injectionPlan (once per Session, unless forced)", () => {
+  test("no endpoint means nothing to inject", () => {
+    assert.deepEqual(injectionPlan({ injected: "", endpoint: "" }), { inject: false, reason: "no local endpoint is up" });
+  });
+
+  test("a session never told gets its first injection", () => {
+    assert.equal(injectionPlan({ injected: "", endpoint: "fp-a" }).inject, true);
+  });
+
+  test("the same endpoint again is refused — that IS the once-per-Session guard", () => {
+    assert.deepEqual(injectionPlan({ injected: "fp-a", endpoint: "fp-a" }), {
+      inject: false,
+      reason: "already injected into this session",
+    });
+  });
+
+  test("a new endpoint (new tunnel, new URL + token) re-injects", () => {
+    assert.equal(injectionPlan({ injected: "fp-a", endpoint: "fp-b" }).inject, true);
+    assert.match(injectionPlan({ injected: "fp-a", endpoint: "fp-b" }).reason, /endpoint changed/);
+  });
+
+  test("force overrides the guard — that is the manual entry", () => {
+    assert.equal(injectionPlan({ injected: "fp-a", endpoint: "fp-a", force: true }).inject, true);
+    assert.match(injectionPlan({ injected: "fp-a", endpoint: "fp-a", force: true }).reason, /manual/);
+    // …but force cannot invent an endpoint: with no tunnel there is nothing to say.
+    assert.equal(injectionPlan({ injected: "fp-a", endpoint: "", force: true }).inject, false);
+  });
 });
