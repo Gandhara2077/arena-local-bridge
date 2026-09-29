@@ -100,11 +100,11 @@ export async function runReprobe({ bridge, sessionId, accountEmail, prompt }) {
       await bridge.converse(
         sessionId,
         { messages: [{ role: "user", content: prompt }] },
-        { injectMcp: false, account, accountEmail }
+        { injectMcp: false, account, accountEmail, purpose: "reprobe" }
       );
-      // converse leaves the page on the Session, with the probe having watched
-      // the run. Up to 20s on a page: not a moment, hence the lease around it.
-      return readSnapshot(await bridge.browser.getPage(account), { timeoutMs: 20_000 });
+      // The same page the turn above just ran on, by the same purpose: it is
+      // the one holding that run's state. Up to 20s on it, hence the lease.
+      return readSnapshot(await bridge.browser.getPage(account, "reprobe"), { timeoutMs: 20_000 });
     });
     return { found, failure: null };
   } catch (error) {
@@ -534,12 +534,22 @@ export function createServer({ bridge, config }) {
     }
 
     // 额度 — read the active account's remaining quota on demand. Manual only,
-    // and never another account: switching credential tears the shared browser
-    // context down, which would kill whatever turn is in flight.
+    // and never another account: switching credential tears down that Account's
+    // browser context, which would kill whatever turn is in flight.
+    //
+    // It reads the page a turn leaves behind, so it shares that page — and it is
+    // counted as a turn in flight for the same reason a turn is: everything that
+    // checks this counter is about to drive that page too.
     if (req.method === "POST" && url.pathname === "/api/account/quota") {
       try {
         if (turnsInFlight > 0) return json(res, 409, busyError());
-        const snap = await bridge.quotaSnapshot();
+        turnsInFlight += 1;
+        let snap;
+        try {
+          snap = await bridge.quotaSnapshot();
+        } finally {
+          turnsInFlight -= 1;
+        }
         poolState = setAccountQuota(poolState, snap.email, snap);
         savePoolState(config, poolState);
         log.info("server", "account quota", {
@@ -846,7 +856,15 @@ export function createServer({ bridge, config }) {
         }
         savePoolState(config, poolState);
       } else {
-        payload = await bridge.runAgent(body, req.headers);
+        // Counted like the Session path above. It drives the same page a turn
+        // does, so an unwatched run here is what lets an on-demand quota read
+        // (which refuses only while turnsInFlight > 0) land on it mid-run.
+        turnsInFlight += 1;
+        try {
+          payload = await bridge.runAgent(body, req.headers);
+        } finally {
+          turnsInFlight -= 1;
+        }
       }
       if (sseHeartbeat) {
         clearInterval(sseHeartbeat);

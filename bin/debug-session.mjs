@@ -39,7 +39,7 @@ const browser = new ArenaBrowser({
   proxy: config.proxy,
 });
 try {
-  const page = await browser.getPage(credential);
+  const page = await browser.getPage(credential, "converse");
   await page.goto(`https://arena.ai/agent/${targetId}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForTimeout(4_000);
   console.log(JSON.stringify({

@@ -104,11 +104,14 @@ export class Harvester {
 
     // One page for the whole batch: createAgentSession() navigates to /agent
     // each round, so a single page is enough and avoids re-auth churn.
-    const page = await this.bridge.browser.getPage(credential);
+    // Its own page: a long harvest navigates repeatedly, and it must not be
+    // driving the page a turn on the same Account is using.
+    const page = await this.bridge.browser.getPage(credential, "harvest");
 
     // The page already carries the probe — ArenaBrowser.getPage injects it into
-    // every page it hands out — so model attribution and the reasoning tier come
-    // from the trace the page fetched itself: no run token, no extra request.
+    // every page that carries a conversation, and this is one — so model
+    // attribution and the reasoning tier come from the trace the page fetched
+    // itself: no run token, no extra request.
     const probeReady = this.bridge.browser.probeAvailable;
     let consecutiveFailures = 0;
 

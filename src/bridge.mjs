@@ -186,8 +186,8 @@ export class Bridge {
     const credential = this.credentials.primary();
     if (!credential) throw new Error("arena-bridge: no credentials — run bin/login.mjs first");
     // A warmup only: it must not hold a lease, or the context could never be
-    // rebuilt after that credential refreshes.
-    await this.browser.getPage(credential);
+    // rebuilt after that credential refreshes. It warms the page turns use.
+    await this.browser.getPage(credential, "converse");
     log.info("bridge", "browser ready", {
       account: credential.email,
       cookieExpiry: this.credentials.expirySummary(credential),
@@ -280,8 +280,8 @@ export class Bridge {
    * one (converse does, from the Session's owner); otherwise by the pool's
    * default pick, which is what the session-creating flows want.
    */
-  async #page(account = null) {
-    return this.browser.getPage(account || this.#credential());
+  async #page(account, purpose) {
+    return this.browser.getPage(account || this.#credential(), purpose);
   }
 
 
@@ -1014,7 +1014,7 @@ export class Bridge {
     // the context underneath it.
     return this.#serialized(() => this.browser.withAccount(account, async () => {
       this.#dump("last-request", JSON.stringify(body));
-      const page = await this.#page(account);
+      const page = await this.#page(account, "converse");
       const key = sessionKey(body, headers);
       const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
       const stateless = hasTools;
@@ -1150,6 +1150,10 @@ export class Bridge {
     // a mid-stream disconnect. Resolve here only for callers that did not, so
     // the rule still holds for every entry point.
     const account = options.account || this.#credential(options.accountEmail);
+    // Which page this turn drives. A reprobe runs its own turn on its own page,
+    // so it cannot navigate out from under one that is already running on this
+    // Account. Validated by getPage, which is the only place that hands one out.
+    const purpose = options.purpose || "converse";
     log.info("bridge", "converse: account resolved", {
       sessionId,
       account: account.email,
@@ -1242,7 +1246,7 @@ export class Bridge {
       // modal if present, fill the composer the Arena模型助手 way, click the real
       // Send button (§4.11), then read ONLY the most-recent turn (§4.12.3).
       const runOnce = async () => {
-        const page = await this.#page(account);
+        const page = await this.#page(account, purpose);
         // Acquire the session public-access-token up front (re-used below).
         let token = "";
         try {
@@ -1369,7 +1373,7 @@ export class Bridge {
             await new Promise((r) => setTimeout(r, 1_500));
             if (!sessionState) break;
             if (parsed.lastEventId) sessionState.lastEventId = parsed.lastEventId;
-            const next = await this.readLatestTurn(await this.#page(account), sessionState);
+            const next = await this.readLatestTurn(await this.#page(account, purpose), sessionState);
             if (next.token) sessionState.token = next.token;
             if (next.lastEventId) parsed.lastEventId = next.lastEventId;
             for (const call of next.nativeCalls || []) {
@@ -1400,7 +1404,7 @@ export class Bridge {
         } else {
           // Legacy behaviour: conversation-only mode does not execute tools, so
           // stop the remote run and report clearly.
-          await this.stopArenaRun(await this.#page(account)).catch(() => undefined);
+          await this.stopArenaRun(await this.#page(account, purpose)).catch(() => undefined);
           const message =
             `(Arena agent attempted sandbox tool(s): ${names}. ` +
             `Conversation-only mode does not execute tools — run without tools, or drive the session directly in Arena.)`;
@@ -1423,7 +1427,7 @@ export class Bridge {
         sessionState.readBudgetMs = this.config.readBudgetMs > 0 ? 45_000 : 0;
         let again;
         try {
-          again = await this.readLatestTurn(await this.#page(account), sessionState);
+          again = await this.readLatestTurn(await this.#page(account, purpose), sessionState);
         } catch (error) {
           log.warn("bridge", "converse: re-read failed", {
             sessionId,
@@ -1497,7 +1501,7 @@ export class Bridge {
   async quotaSnapshot() {
     const account = this.#credential();
     return this.browser.withAccount(account, async () => {
-      const page = await this.#page(account);
+      const page = await this.#page(account, "converse");
       const snap = await readSnapshot(page, { waitForModel: false });
       return {
         email: account.email,

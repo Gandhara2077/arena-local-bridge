@@ -9,6 +9,8 @@ export class RecaptchaBroker {
     this.ttlMs = ttlMs;
     this.token = null;
     this.tokenAt = 0;
+    // The mint in flight, shared with whoever asks while it runs.
+    this.pendingMint = null;
     this.errors = 0;
     this.lastError = null;
     this.generations = 0;
@@ -22,6 +24,17 @@ export class RecaptchaBroker {
    *  Account is what selects the browser context now. */
   async get(credential, force = false) {
     if (!force && this.isFresh()) return this.token;
+    // One mint at a time. A token is minted on a page of its own, and two
+    // concurrent requests would both navigate that one page — each finding the
+    // other's document. They want the same token anyway, so the second waits.
+    if (this.pendingMint) return this.pendingMint;
+    this.pendingMint = this.#mint(credential).finally(() => {
+      this.pendingMint = null;
+    });
+    return this.pendingMint;
+  }
+
+  async #mint(credential) {
     try {
       this.token = await this.browser.freshRecaptchaToken(credential, this.siteKey);
       this.tokenAt = Date.now();
