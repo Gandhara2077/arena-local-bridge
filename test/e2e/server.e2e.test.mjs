@@ -330,4 +330,24 @@ describe("operator endpoints over real HTTP", () => {
       );
     } finally { await e2e.close(); }
   });
+
+  test("a busy rejection from the bridge's own gate surfaces as 409, not 500", async () => {
+    const e2e = await startE2E({
+      bridge: {
+        quotaSnapshot: async () => {
+          throw Object.assign(new Error("A turn is in flight; retry when it finishes."), {
+            status: 409,
+            code: "busy",
+          });
+        },
+      },
+    });
+    try {
+      const res = await httpRequest(e2e.port, {
+        method: "POST", reqPath: "/api/account/quota", headers: authHeaders(), body: {},
+      });
+      assert.equal(res.status, 409);
+      assert.equal(res.json.error.code, "busy");
+    } finally { await e2e.close(); }
+  });
 });
