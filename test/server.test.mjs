@@ -1,6 +1,41 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateCompletion, RateLimiter, exposesBridgeKey } from "../src/server.mjs";
+import { validateCompletion, RateLimiter, exposesBridgeKey, sessionDriver } from "../src/server.mjs";
+
+// A Session's Model may only ever be attributed through its OWN Account. The
+// pool also has a default pick, and the two are routinely different Accounts —
+// substituting it is how a reprobe once ran its turn as the owner and then read
+// the probe (and wrote the Model) as somebody else.
+const PRIMARY = { email: "primary@example.com", cookieHeader: "arena-auth-prod-v1=p" };
+const OWNER = { email: "owner@example.com", cookieHeader: "arena-auth-prod-v1=o" };
+
+function fakeCredentials({ ownerUsable = true } = {}) {
+  return {
+    primary: () => PRIMARY,
+    forSession: (email) => {
+      if (!ownerUsable) throw Object.assign(new Error("session_account_unavailable"), { status: 409 });
+      return email === OWNER.email ? OWNER : null;
+    },
+  };
+}
+
+test("sessionDriver: drives by the Session's owner, never the pool's primary", () => {
+  const driver = sessionDriver(fakeCredentials(), OWNER.email);
+  assert.equal(driver, OWNER);
+  assert.notEqual(driver, PRIMARY);
+});
+
+test("sessionDriver: an unknown owner is null, not the primary", () => {
+  assert.equal(sessionDriver(fakeCredentials(), ""), null);
+  assert.equal(sessionDriver(fakeCredentials(), undefined), null);
+  assert.equal(sessionDriver(fakeCredentials(), "   "), null);
+});
+
+test("sessionDriver: an unusable owner surfaces its 409 instead of degrading", () => {
+  // Falling back to the primary here would turn "this Session has no usable
+  // Account" into "attribute some other Account's Model to it".
+  assert.throws(() => sessionDriver(fakeCredentials({ ownerUsable: false }), OWNER.email), /session_account_unavailable/);
+});
 
 test("validateCompletion accepts a valid request", () => {
   const err = validateCompletion({ model: "agent", messages: [{ role: "user", content: "hi" }], tools: [] });

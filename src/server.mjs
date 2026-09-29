@@ -69,13 +69,33 @@ function noActiveSessionError() {
 }
 
 /**
- * The browser page for operator actions (caller drives the navigation). These
- * are short, single-navigation actions taken with the pool's primary Account, so
- * they hold no lease: if a refresh lands mid-navigation the action fails visibly
- * and can simply be repeated.
+ * The browser page for a Session operation, taken from the Account that drives
+ * it. Callers pass the credential they are already using — never a fresh pool
+ * lookup, which is how a session ended up read through somebody else's page.
+ *
+ * These are short, single-navigation actions, so they hold no lease of their
+ * own: the operation that owns them takes one around the whole thing.
  */
-async function sessionPageFor(bridge) {
-  return bridge.browser.getPage(bridge.credentials?.primary?.() || null);
+async function sessionPageFor(bridge, credential) {
+  return bridge.browser.getPage(credential || null);
+}
+
+/**
+ * Which Account drives a Session? Its OWNER — never the pool's default pick.
+ *
+ * The two are resolved separately, and a Session whose owner is not the primary
+ * does not care what the primary is. Substituting the primary was a real bug: a
+ * reprobe ran its turn as the owner, then read the probe as the primary, and
+ * wrote the primary's last Model into the owner's Session.
+ *
+ * The lookup is deliberately not wrapped in a fallback. `forSession` throws when
+ * the owner exists but cannot be used, and that has to reach the caller as the
+ * 409 it is rather than quietly degrade into "use whoever is primary".
+ */
+export function sessionDriver(credentials, ownerEmail) {
+  const owner = String(ownerEmail || "").trim();
+  if (!owner) return null;
+  return credentials.forSession(owner);
 }
 
 function busyError() {
@@ -448,27 +468,36 @@ export function createServer({ bridge, config }) {
         const sid = await poolSessionId(req, res);
         if (!sid) return;
         const prompt = `[arena-bridge model probe ${crypto.randomBytes(4).toString("hex")}] Reply with just: OK`;
+        // The owner is resolved ONCE and then drives the whole reprobe — the turn
+        // and the probe read after it. Reading the probe as the pool's default
+        // pick would take its answer from whichever Account ran last and write
+        // that Model into THIS Session.
+        const accountEmail = sessionAccountEmail(config.archiveDir, sid);
+        const account = sessionDriver(bridge.credentials, accountEmail);
         let failure = null;
+        let found = null;
         turnsInFlight += 1;
         try {
-          await bridge.converse(
-            sid,
-            { messages: [{ role: "user", content: prompt }] },
-            { injectMcp: false, accountEmail: sessionAccountEmail(config.archiveDir, sid) }
-          );
+          // Both steps sit inside one lease, so no refresh can swap the context
+          // between the run and the read that attributes its Model.
+          found = await bridge.browser.withAccount(account, async () => {
+            await bridge.converse(
+              sid,
+              { messages: [{ role: "user", content: prompt }] },
+              { injectMcp: false, account, accountEmail }
+            );
+            // converse leaves the page on the Session, with the probe having
+            // watched the run — so this read now has something to report. Up to
+            // 20s on a page: not a moment, hence the lease around it.
+            return readSnapshot(await sessionPageFor(bridge, account), { timeoutMs: 20_000 });
+          });
         } catch (error) {
+          // A failed turn leaves nothing new for the probe to report, and a stale
+          // read is exactly what would mis-attribute the Model. Report it instead.
           failure = error instanceof Error ? error.message : String(error);
         } finally {
           turnsInFlight -= 1;
         }
-        // converse leaves the page on the Session, with the probe having watched
-        // the run — so this read now has something to report.
-        //
-        // Up to 20s on a page: not a moment, so it holds the Account's context
-        // like any other long operation.
-        const found = await bridge.browser.withAccount(bridge.credentials?.primary?.() || null, async () => {
-          return readSnapshot(await sessionPageFor(bridge), { timeoutMs: 20_000 });
-        });
         if (!found?.model) {
           return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: failure || found?.error || null });
         }
