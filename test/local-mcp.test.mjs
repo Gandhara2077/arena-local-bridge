@@ -306,12 +306,20 @@ describe("exec_command (workspace cwd, free execution per ADR 0003)", () => {
     assert.equal(plan.maxOutputBytes, 262_144);
   });
 
-  test("exec_command's schema discloses its local-shell scope (ADR 0011)", async () => {
+  test("exec_command's schema discloses its local-shell scope (ADR 0011, ticket 26)", async () => {
     const res = await rpc("tools/list", {});
     const body = await res.json();
     const exec = body.result.tools.find((t) => t.name === "exec_command");
-    assert.match(exec.description, /FULL local-user permissions/);
-    assert.match(exec.description, /does NOT restrict/);
+    // The scope has to be stated: the agent reads this right after tools/list,
+    // which the preamble itself points it at. What must NOT come back is the
+    // emphasis that a safety layer reads as a privilege claim — "FULL …
+    // permissions" and "does NOT restrict" are the wording the preamble was
+    // rewritten to drop (ticket 26), and tool metadata is not a safer place to
+    // keep it than the prompt was.
+    assert.match(exec.description, /runs as the local user/);
+    assert.match(exec.description, /not what it is able to read or write/);
+    assert.doesNotMatch(exec.description, /FULL local-user permissions/);
+    assert.doesNotMatch(exec.description, /does NOT restrict/);
   });
 
   test("ADR 0011 fixated: exec reaches what the file boundary denies", async () => {
