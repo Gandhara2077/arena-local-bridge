@@ -74,9 +74,30 @@ export function writeSecretFile(file, data) {
 // the one a Windows administrator would look for anyway.
 //
 // Pure, so the rule is assertable without a disk: drop the inherited entries,
-// then grant full control to this account and nobody else.
+// drop the OS's own full-control principals, then grant full control to this
+// account and nobody else.
+//
+// The middle step is not redundant. `/inheritance:r` only removes entries the
+// file INHERITED — and Windows does not always give a new file any: when the
+// parent directory holds no inheritable ACE, CreateFile falls back to the
+// process token's default DACL, which is owner + Administrators + SYSTEM as
+// three EXPLICIT entries that `/inheritance:r` cannot touch. That is not a
+// hypothetical: the GitHub runner's temp directory is such a parent, so the
+// previous arguments produced a three-entry ACL in exactly the environment this
+// project's CI runs in, while a developer machine (whose temp directory does
+// hand ACEs down) came out at one. Naming the two by SID rather than by name
+// keeps it working on a localized Windows, where the display names are
+// translated.
 export function icaclsRestrictArgs(file, account) {
-  return [file, "/inheritance:r", "/grant:r", `${account}:(F)`];
+  return [
+    file,
+    "/inheritance:r",
+    "/remove:g",
+    "*S-1-5-18", // NT AUTHORITY\SYSTEM
+    "*S-1-5-32-544", // BUILTIN\Administrators
+    "/grant:r",
+    `${account}:(F)`,
+  ];
 }
 
 // Fully qualified, so icacls picks the right account on a domain-joined

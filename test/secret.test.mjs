@@ -94,10 +94,17 @@ test("parseIcalsAces: an inherited ACL shows up as other people having access", 
   assert.ok(aces.some((a) => a.identity === "NT AUTHORITY\\Authenticated Users"));
 });
 
-test("icaclsRestrictArgs: drops inheritance and grants only the given account", () => {
+test("icaclsRestrictArgs: drops inheritance, drops the OS principals, grants only the given account", () => {
   assert.deepEqual(icaclsRestrictArgs("D:/data/auth-token.txt", "PC-HOST\\me"), [
     "D:/data/auth-token.txt",
     "/inheritance:r",
+    // By SID, not by name: the display names are translated on a localized
+    // Windows. SYSTEM and Administrators arrive as EXPLICIT entries whenever the
+    // parent directory hands down nothing to inherit (the CI runner's temp dir),
+    // and /inheritance:r cannot remove those.
+    "/remove:g",
+    "*S-1-5-18",
+    "*S-1-5-32-544",
     "/grant:r",
     "PC-HOST\\me:(F)",
   ]);
