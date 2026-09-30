@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - feature/repository-traffic
+    paths-ignore:
+      - assets/traffic-history.json
+      - assets/traffic.svg
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
@@ -40,4 +43,3 @@ jobs:
           git commit -m "chore: update repository traffic"
           git push
 
-# Branch preview trigger is intentionally a push-triggered test path; scheduled collection is for main.
