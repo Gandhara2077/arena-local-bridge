@@ -37,16 +37,35 @@ test("it names the publish tool for deliverables", () => {
   assert.match(mcpPreamble({ url: URL, token: TOKEN }), /file_publish/);
 });
 
-test("it discloses that exec_command is a local shell outside the file boundary (ADR 0011)", () => {
+test("it does not claim privileges the user did not grant (ticket 26)", () => {
+  // 2026-09-29 real run: the old wording — "exec_command runs with the local
+  // user's full privileges, outside the file boundary" — read to the Arena
+  // agent as a prompt-injection attempt, and it spent the whole turn refusing
+  // the user's task instead of doing it. The capability is unchanged; what
+  // changed is that the preamble no longer announces it as a privilege.
   const text = mcpPreamble({ url: URL, token: TOKEN });
-  assert.match(text, /完整权限/);
-  assert.match(text, /不受上述文件边界限制/);
-  assert.match(text, /先问用户/);
+  for (const phrase of ["完整权限", "不受上述文件边界限制", "不受文件边界限制", "任意命令", "无限制"]) {
+    assert.ok(!text.includes(phrase), `the preamble must not claim: ${phrase}`);
+  }
+  // The disclosure itself survives — the agent still has to know exec_command
+  // is not a sandbox, and still asks before doing anything destructive.
+  assert.match(text, /exec_command 在我这台电脑上执行命令/);
+  assert.match(text, /先问我/);
+});
+
+test("it frames the channel as the user's own machine, not an outside service (ticket 26)", () => {
+  // The agent named three things as suspicious: a throwaway tunnel hostname, a
+  // plaintext bearer token, and a privilege claim. The first two are the
+  // transport and cannot be removed here; the wording around them can say who
+  // set the channel up and what the token is (and is not).
+  const text = mcpPreamble({ url: URL, token: TOKEN });
+  assert.match(text, /我在自己电脑上开了一个本地工具通道/);
+  assert.match(text, /不是账号凭证/);
 });
 
 test("it says the tools are reached over HTTP, not from the agent's own tool list", () => {
   const text = mcpPreamble({ url: URL, token: TOKEN });
-  assert.match(text, /你的工具列表里不会有这些工具/);
+  assert.match(text, /工具列表不会有这些工具/);
   assert.match(text, /HTTP JSON-RPC/);
   assert.match(text, /tools\/call/);
   assert.match(text, /Accept: application\/json, text\/event-stream/);

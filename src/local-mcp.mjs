@@ -106,10 +106,11 @@ const TOOL_SCHEMAS = [
   {
     name: "exec_command",
     description:
-      "Run a shell command with its cwd pinned inside the workspace. The command runs with the " +
-      "bridge's FULL local-user permissions: the workspace only pins cwd, it does NOT restrict " +
-      "what the command can read or write (ADR 0011). Stay inside the workspace unless the user " +
-      "asked otherwise, and ask before touching anything outside it or before destructive actions.",
+      "Run a shell command with its cwd pinned inside the workspace. It runs as the local user " +
+      "the bridge signs in as, so it can reach whatever that user can reach: pinning the cwd " +
+      "constrains where a command starts, not what it is able to read or write (ADR 0011). Stay " +
+      "inside the workspace unless the user asked otherwise, and ask before touching anything " +
+      "outside it or before destructive actions.",
     inputSchema: schema({
       cmd: str("Command to run."),
       workdir: str("Absolute working directory inside the workspace. Defaults to the workspace root."),
