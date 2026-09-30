@@ -276,6 +276,14 @@ missing transcript cannot silently point the agent at the wrong project. That is
 recently — two active conversations cannot be attributed to either caller. The bridge logs which
 source it used (`workspaceFrom: request-header | codex-session | codex-recent | config | none`).
 
+**The manual re-injection has one boundary.** The dashboard's *re-inject* button carries no request and
+no Codex conversation of its own, so it can only reuse what the bridge already learned while serving
+that Session. A Session that has **never** been served a turn here, combined with **more than one**
+recently written transcript, therefore has nothing to attribute it to — and the button refuses
+("没认出工作区") rather than guess. Two ways out: run one real turn in the target project, which teaches
+the bridge which directory that Session belongs to, or give a default via `ARENA_MCP_WORKSPACE` /
+`mcp-workspace.txt` (priority 3 above applies here too).
+
 > **Implementation-dependent:** the Codex detection reads Codex's own on-disk transcripts
 > (`~/.codex/sessions/…/rollout-*.jsonl` and their `cwd` field). That layout is undocumented and not
 > a public interface, so it can change with any Codex release. When it breaks, the feature degrades

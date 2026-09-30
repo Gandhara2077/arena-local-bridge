@@ -392,6 +392,9 @@ describe("POST /api/mcp/reinject — the manual entry for a session whose worksp
     assert.equal(res.json.injected, false);
     assert.equal(res.json.pending, false);
     assert.equal(res.json.reason, "no workspace recognized");
+    // Ticket 24: this route's usual caller is the GUI button, which has no
+    // headers to set, so the remedies it can actually perform come first.
+    assert.match(res.json.hint, /mcp-workspace\.txt/);
     assert.match(res.json.hint, /x-arena-workspace/);
   });
 

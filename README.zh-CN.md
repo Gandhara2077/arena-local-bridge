@@ -233,6 +233,8 @@ header: Authorization: Bearer <token>
 
 检测机制不会猜测：无法识别的 Session ID 会解析为空并继续回退，因此缺失 transcript 不会静默地把 Agent 指向错误项目。这也是“最近只有一个活跃 transcript”回退机制在近期存在多个 transcript 时保持静默的原因——两个活跃对话无法可靠归属于其中任何一个调用方。Bridge 会记录实际使用的来源（workspaceFrom: request-header | codex-session | codex-recent | config | none）。
 
+**手动重注入有一条边界。** 面板上的「重注入」按钮不带任何请求、也没有属于它自己的 Codex 会话，因此它只能复用 Bridge 在服务这个 Session 的过程中已经学到的东西。所以「这个 Session 从未在本 Bridge 上跑过 turn」+「近期有多个 transcript」同时成立时，没有任何依据可以归属，按钮会直接拒绝（“没认出工作区”）而不是猜。两条出路：在目标项目里跑一轮真实对话（从此 Bridge 记住这个 Session 属于哪个目录），或者用 `ARENA_MCP_WORKSPACE` / `mcp-workspace.txt` 给一个默认值（上面第 3 条在这里同样适用）。
+
 > **依赖实现细节：** Codex 自动发现读取 Codex 自己的磁盘 transcript（~/.codex/sessions/…/rollout-*.jsonl 及其 cwd 字段）。该目录结构属于未公开文档，也不是公开接口，因此任何 Codex 版本都可能改变它。功能失效时会退化为“无工作区”，而不会指向错误项目；ARENA_MCP_WORKSPACE 和 Request Header 仍然是稳定的配置路径。如果 Codex 数据存储在其他位置，可以设置 ARENA_CODEX_SESSIONS_DIR。
 
 需要注意的是，本地客户端与 Bridge 之间的代理可能会完全丢弃自定义 Header。如果配置的 Header 始终没有出现，请检查 Bridge 的 workspace hints 日志行，其中会报告实际收到的 x-* Header。使用代理或 Gateway 时，请确保它保留客户端集成所需的 Request Header。
