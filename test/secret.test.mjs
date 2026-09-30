@@ -216,18 +216,31 @@ test("restrictSecretFile: a file it cannot replace keeps the ACL — and the sec
   assert.deepEqual(fs.readdirSync(dir), ["auth-token.txt"], "and no temporary file was left behind");
 });
 
-test("restrictSecretFile: refuses a file far larger than a secret", {
-  skip: process.platform !== "win32" && "只有 Windows 的替换路径把内容读进内存",
+// The startup pass tightens an existing .env whatever it holds. A size limit
+// here would turn a large one into a silent give-up instead: the caller logs the
+// failure and carries on, so the file would stay exactly as it was. Nothing
+// bounds the size because nothing has to — the copy is made by the platform.
+test("restrictSecretFile: a large file is tightened like any other", {
+  skip: process.platform !== "win32" && "Windows 之外的平台只有 chmod，本来就没有大小一说",
 }, () => {
   const dir = tempDir("arena-secret-");
-  const file = path.join(dir, "auth-token.txt");
-  // Sparse: the size is what the guard reads, not the bytes.
-  const big = fs.openSync(file, "w");
-  fs.ftruncateSync(big, 128 * 1024);
-  fs.closeSync(big);
+  const file = path.join(dir, ".env");
+  // Sparse: only the size matters, not the bytes behind it.
+  const fd = fs.openSync(file, "w");
+  fs.ftruncateSync(fd, 128 * 1024);
+  fs.closeSync(fd);
+  execFileSync("icacls", [file, "/grant", "*S-1-5-11:(R)"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
 
-  assert.throws(() => restrictSecretFile(file), (error) => error.code === "secret_too_large");
-  assert.deepEqual(fs.readdirSync(dir), ["auth-token.txt"], "and nothing was staged next to it");
+  restrictSecretFile(file);
+
+  const aces = parseIcalsAces(readAcl(file), file);
+  assert.equal(aces.length, 1, `expected one entry, got ${JSON.stringify(aces)}`);
+  assert.match(aces[0].identity, new RegExp(`(^|\\\\)${os.userInfo().username}$`, "i"));
+  assert.equal(fs.statSync(file).size, 128 * 1024, "the content is carried over, not truncated");
+  assert.deepEqual(fs.readdirSync(dir), [".env"], "and nothing was staged beside it");
 });
 
 test("currentAccount: names one account, qualified when a domain is known", () => {

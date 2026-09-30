@@ -37,22 +37,27 @@ export function requireSecret(dotEnv) {
 //      between two writers and a name an older run may have left behind;
 //   2. restrict it BEFORE the secret is in it, so there is no window in which
 //      the secret sits in the directory under the directory's own ACL;
-//   3. write, close, and rename over the target — same directory, so the
-//      protected file simply becomes the target, and nobody ever reads a
-//      half-written secret.
+//   3. fill it, then rename over the target — same directory, so the protected
+//      file simply becomes the target, and nobody ever reads a half-written
+//      secret.
 //
 // A failure at any step removes the temporary file and rethrows: the previous
 // contents (or the absence of a file) are left exactly as they were.
-export function writeSecretFile(file, data) {
-  const tmp = `${file}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+//
+// `fill` is the only thing the two writers below do differently, and neither of
+// them has to know how big the secret is: one has the bytes in hand, the other
+// copies them from the file they are already in. Neither reads anything into
+// this process, which is why no size has to be ruled out in advance.
+function stageProtectedFile(target, fill) {
+  const tmp = `${target}.${crypto.randomBytes(6).toString("hex")}.tmp`;
   let handle = null;
   try {
     handle = fs.openSync(tmp, "wx", 0o600);
     protectFreshFile(tmp);
-    fs.writeSync(handle, data);
     fs.closeSync(handle);
     handle = null;
-    fs.renameSync(tmp, file);
+    fill(tmp);
+    fs.renameSync(tmp, target);
   } catch (error) {
     if (handle !== null) {
       try {
@@ -84,6 +89,11 @@ export function writeSecretFile(file, data) {
     }
     throw error;
   }
+}
+
+// A secret this module holds, written owner-only or not written at all.
+export function writeSecretFile(file, data) {
+  stageProtectedFile(file, (tmp) => fs.writeFileSync(tmp, data));
 }
 
 // Windows has no POSIX mode bits: measured there, a file written with
@@ -160,11 +170,6 @@ function protectFreshFile(file) {
   }
 }
 
-// The largest file that may be tightened by the replace path below: these hold
-// a token, a key or a small JSON blob, and a path that has become something else
-// is worth reporting rather than reading into memory.
-const MAX_SECRET_BYTES = 64 * 1024;
-
 // Make one file owner-only, or say that you could not.
 //
 // On Windows this REPLACES the file — a fresh, already-protected copy is renamed
@@ -176,8 +181,14 @@ const MAX_SECRET_BYTES = 64 * 1024;
 // that already holds a secret it would be a window in which the secret is either
 // exposed or beyond repair. Building the replacement and renaming it into place
 // is one step that either happened or did not, and it is the step writeSecretFile
-// already takes — so the file icacls ever sees is one this module created itself,
-// and the module keeps one rule instead of two.
+// already takes — both go through stageProtectedFile — so the file icacls ever
+// sees is one this module created itself, and the module keeps one rule instead
+// of two.
+//
+// The copy is the platform's, not this process's: nothing is read into memory,
+// so an existing .env of any size can still be tightened. A size limit here
+// would be a new way for the startup pass to give up on a file it used to
+// tighten, and giving up quietly is the one outcome this module exists to avoid.
 //
 // What it costs: the file's identity changes (inode, creation time, hard links)
 // and the old copy must not be read-only, because a read-only target fails the
@@ -196,12 +207,5 @@ export function restrictSecretFile(file) {
     fs.chmodSync(file, 0o600);
     return;
   }
-  const { size } = fs.statSync(file);
-  if (size > MAX_SECRET_BYTES) {
-    throw Object.assign(
-      new Error(`refusing to make ${file} owner-only: ${size} bytes is not a secret`),
-      { code: "secret_too_large" }
-    );
-  }
-  writeSecretFile(file, fs.readFileSync(file));
+  stageProtectedFile(file, (tmp) => fs.copyFileSync(file, tmp));
 }
