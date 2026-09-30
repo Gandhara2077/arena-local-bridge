@@ -1434,15 +1434,24 @@ export class Bridge {
       // modal if present, fill the composer the Arena模型助手 way, click the real
       // Send button (§4.11), then read ONLY the most-recent turn (§4.12.3).
       //
-      // `delivered` is what separates the two halves for the retry below. The
-      // retry exists because the PAGE died, which says nothing about the send:
-      // once appendAgentMessage has returned, the prompt is in the session, and
-      // running the whole attempt again would put the user's message — and the
-      // one-shot MCP preamble decorate folded into it — in front of the model a
-      // second time. So a retry after a delivered prompt re-reads instead. The
-      // read needs nothing the send produced (it reconnects /out and tells our
-      // turn from the replayed history by the replay gap, §4.31), but it does
-      // need the page to be on the session: its fetches are relative.
+      // `delivered` is what separates the two halves for the retry below, and it
+      // asserts exactly one thing: appendAgentMessage RETURNED. What that covers
+      // is the teardown-after-send case — the prompt reached Arena, and the page
+      // died while we were reading the answer — where running the whole attempt
+      // again would put the user's message, and the one-shot MCP preamble
+      // decorate folded into it, in front of the model twice. So a retry after a
+      // delivered prompt re-reads instead. The read needs nothing the send
+      // produced (it reconnects /out and tells our turn from the replayed
+      // history by the replay gap, §4.31), but it does need the page to be on the
+      // session: its fetches are relative.
+      //
+      // What it does NOT cover, so that nobody reads this as exactly-once: a send
+      // whose outcome is unknown — the request left the process, the reply never
+      // came back, so appendAgentMessage threw with the message possibly already
+      // in the session. That case still retries, and can still deliver twice.
+      // Closing it needs something on Arena's side (an idempotency key, or a way
+      // to ask whether the session already holds the message), which this project
+      // does not have.
       let delivered = false;
       const runOnce = async () => {
         const page = await this.#page(account, purpose);
