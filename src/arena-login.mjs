@@ -18,16 +18,34 @@ const require = createRequire(import.meta.url);
 // model name. The previous deployment still answers, still locks to 20260930.5,
 // and that version still delivers the token.
 //
-// Two things send the POST to that deployment:
+// What actually carries the pin was measured on arena.ai rather than assumed.
+// Arena serves its web frontend and its API from two different Vercel
+// deployments — one navigation to /agent returns assets stamped `?dpl=<web>`
+// while the page's own XHR answers `x-arena-api-deployment: <api>` — and
+// `__vdpl` only selects a deployment inside whichever of the two is being
+// asked. Measured with the cookie installed on the whole context: navigations
+// to `/` and `/agent` came back from the same web deployment as without it, and
+// a same-origin `/api/*` call from the page came back from the same API
+// deployment as without it. The cookie therefore does not in practice drag the
+// page, or the rest of the context, onto the pinned deployment — even though
+// Vercel documents it as pinning "that request ... including document
+// navigations". Verified via `document.cookie` that it was really being sent.
 //
-//   1. Vercel's Skew Protection cookie (`__vdpl`), which every request from
-//      this context then carries; and
-//   2. dropping Arena's own `x-arena-web-deployment` / `x-deployment-id`
-//      request headers, which its SPA stamps on requests and which the server
-//      prefers over the cookie.
+// Two things carry the pin instead, and the stamp comes off on the create-chat
+// path ONLY: Arena's SPA otherwise attaches `x-arena-web-deployment` /
+// `x-deployment-id` naming the current deployment, and the server prefers those
+// over the cookie.
 //
-// The stamp is dropped on the create-chat request ONLY, so the page and every
-// other request stay on the current deployment.
+// Which of the two actually decides create-chat is NOT isolated — doing that
+// needs a real Session, and the evidence for the pin is end-to-end (a pinned
+// Session reports `lockToVersion` 20260930.5, an unpinned one 20260930.20). For
+// `/api/*` the decider is Arena's own headers rather than the cookie: naming
+// the pinned id in `x-arena-web-deployment`, `x-deployment-id` AND
+// `x-arena-api-deployment` together routes the request there (it answers with
+// `x-arena-api-deployment: dpl_HDHBFo2Fyx5bx9ABr4Uau7kdXfhL` and
+// `x-arena-trigger-version: 20260930.5`), while `?dpl=` or `x-deployment-id`
+// alone are refused with 409 refresh_required. A header-only pin is the cleaner
+// shape, and the first thing to try if this needs revisiting.
 //
 // This is a stopgap pinned to one Arena deployment. When Arena deletes it the
 // model name goes back to reading as unknown (a Session created by the current
@@ -45,9 +63,11 @@ export function deploymentPin(env = process.env) {
 }
 
 /**
- * The create-chat POST as the pinned deployment has to see it: without Arena's
- * own stamp, which would otherwise send it straight back to the current
- * deployment. A copy, so the caller's header object is left alone.
+ * The create-chat POST with Arena's own deployment stamp removed. Its SPA
+ * attaches `x-arena-web-deployment` / `x-deployment-id` naming the current
+ * deployment to the requests it makes, and the server prefers those over the
+ * `__vdpl` cookie — which is why they come off for this one path. A copy, so
+ * the caller's header object is left alone.
  */
 export function withoutDeploymentStamp(headers) {
   const kept = { ...headers };
