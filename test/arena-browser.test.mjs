@@ -6,7 +6,17 @@
 // marks that Account's context stale, and the rebuild waits for it to go idle.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ArenaBrowser, contextAction, pageAction, PAGE_PURPOSES } from "../src/arena-login.mjs";
+import {
+  ArenaBrowser,
+  contextAction,
+  pageAction,
+  PAGE_PURPOSES,
+  CREATE_SESSION_PATH,
+  DEPLOYMENT_PIN,
+  DEPLOYMENT_PIN_COOKIE,
+  deploymentPin,
+  withoutDeploymentStamp,
+} from "../src/arena-login.mjs";
 
 const A = { email: "a@example.com", cookieHeader: "arena-auth-prod-v1=a", updatedAt: "2026-01-01T00:00:00Z" };
 const B = { email: "b@example.com", cookieHeader: "arena-auth-prod-v1=b", updatedAt: "2026-01-01T00:00:00Z" };
@@ -82,8 +92,14 @@ function fakeBrowser() {
         cookies: [],
         //每页一个可辨认的对象：这些测试要断言的正是「拿到了哪一页」。
         pages: [],
+        // The deployment pin registers a request route; recorded so the tests
+        // can both see that it exists and drive its handler.
+        routes: [],
         addInitScript: async () => {},
         addCookies: async (list) => context.cookies.push(...list),
+        route: async (pattern, handler) => {
+          context.routes.push({ pattern, handler });
+        },
         newPage: async () => {
           const page = {
             isClosed: () => page.closed,
@@ -338,4 +354,87 @@ test("snapshot: reports which purposes hold a page", async () => {
       [B.email, ["reprobe"]],
     ]
   );
+});
+
+// ── the deployment pin ──────────────────────────────────────────────────────
+//
+// Arena decides a Session's Trigger.dev task version when it answers the
+// create-chat POST, and since 2026-09-30 the version the current deployment
+// picks hands the page no run token — so the model name becomes unreadable.
+// The pin sends that one POST to the previous deployment instead.
+
+test("deploymentPin: defaults to the pinned deployment, and `none` turns it off", () => {
+  assert.equal(deploymentPin({}), DEPLOYMENT_PIN);
+  assert.equal(deploymentPin({ ARENA_DEPLOYMENT_PIN: "  " }), DEPLOYMENT_PIN);
+  assert.equal(deploymentPin({ ARENA_DEPLOYMENT_PIN: "none" }), "");
+  assert.equal(deploymentPin({ ARENA_DEPLOYMENT_PIN: "dpl_OtherDeployment0000000000000000" }), "dpl_OtherDeployment0000000000000000");
+});
+
+test("withoutDeploymentStamp: drops Arena's own deployment stamp, keeps everything else", () => {
+  const original = {
+    "x-arena-web-deployment": "dpl_current",
+    "x-deployment-id": "dpl_current",
+    accept: "application/json",
+    cookie: "arena-auth-prod-v1=abc",
+  };
+  const kept = withoutDeploymentStamp(original);
+  assert.deepEqual(kept, { accept: "application/json", cookie: "arena-auth-prod-v1=abc" });
+  // The caller's object is the request's own header map: mutating it would
+  // rewrite the request we are only supposed to be re-sending.
+  assert.equal(original["x-arena-web-deployment"], "dpl_current");
+});
+
+test("getPage: the context carries the pin cookie and the create-chat route", async () => {
+  const browser = browserWithFake();
+  await browser.getPage(A, "converse");
+  const context = onlyContext(browser);
+  assert.ok(
+    context.cookies.some((cookie) => cookie.name === DEPLOYMENT_PIN_COOKIE && cookie.value === DEPLOYMENT_PIN),
+    "context 必须带上 __vdpl"
+  );
+  assert.deepEqual(
+    context.routes.map((entry) => entry.pattern),
+    [`**${CREATE_SESSION_PATH}`],
+    "只有在 create-chat 这一个请求上做改写"
+  );
+});
+
+test("getPage: the create-chat route really strips the stamp before the request goes out", async () => {
+  const browser = browserWithFake();
+  await browser.getPage(A, "converse");
+  const [route] = onlyContext(browser).routes;
+  const seen = [];
+  await route.handler({
+    request: () => ({
+      allHeaders: async () => ({ "x-arena-web-deployment": "dpl_current", "x-deployment-id": "dpl_current", accept: "application/json" }),
+    }),
+    continue: async (options) => {
+      seen.push(options);
+    },
+  });
+  assert.deepEqual(seen, [{ headers: { accept: "application/json" } }]);
+});
+
+test("getPage: ARENA_DEPLOYMENT_PIN=none leaves the context completely alone", async () => {
+  const previous = process.env.ARENA_DEPLOYMENT_PIN;
+  process.env.ARENA_DEPLOYMENT_PIN = "none";
+  try {
+    const browser = browserWithFake();
+    await browser.getPage(A, "converse");
+    const context = onlyContext(browser);
+    assert.deepEqual(context.routes, []);
+    assert.ok(!context.cookies.some((cookie) => cookie.name === DEPLOYMENT_PIN_COOKIE));
+  } finally {
+    if (previous === undefined) delete process.env.ARENA_DEPLOYMENT_PIN;
+    else process.env.ARENA_DEPLOYMENT_PIN = previous;
+  }
+});
+
+test("getPage: a rebuilt context gets the pin again", async () => {
+  const browser = browserWithFake();
+  await browser.getPage(A, "converse");
+  await browser.getPage({ ...A, cookieHeader: "arena-auth-prod-v1=a2", updatedAt: "2026-02-02T00:00:00Z" }, "converse");
+  const contexts = browser.browser.contexts;
+  assert.equal(contexts.length, 2, "凭据变了要重建");
+  assert.deepEqual(contexts[1].routes.map((entry) => entry.pattern), [`**${CREATE_SESSION_PATH}`], "新 context 也要被固定");
 });
