@@ -108,11 +108,23 @@ export function currentAccount() {
   return domain && !name.includes("\\") ? `${domain}\\${name}` : name;
 }
 
-// Make one file owner-only, or say that you could not. Throwing rather than
-// warning is deliberate: "we failed to protect it" is not something a caller
-// may go on believing succeeded, and only the caller knows whether to abort.
-// Callers that are tightening a file they did NOT create (a copy left by an
-// older version) may catch this and report it — see readOrCreateToken.
+// Make one file owner-only, or say that you could not — with one documented
+// limit. What this removes is the inherited entries plus the OS's own two
+// full-control principals. An EXPLICIT entry naming some third account is NOT
+// removed, and `/inheritance:r` does not touch those either.
+//
+// That limit is invisible for a file we just created (writeSecretFile makes its
+// own, so there is nothing but the owner left — asserted by test/secret.test.mjs)
+// and reachable for a file we did not: readOrCreateToken and the startup .env
+// pass already-existing files here, and those can carry anything. Ticket 23 owns
+// closing that, and its acceptance is a test with a planted explicit ACE for a
+// third account.
+//
+// Throwing rather than warning is deliberate: "we failed to protect it" is not
+// something a caller may go on believing succeeded, and only the caller knows
+// whether to abort. Callers that are tightening a file they did NOT create (a
+// copy left by an older version) may catch this and report it — see
+// readOrCreateToken.
 export function restrictSecretFile(file) {
   if (process.platform !== "win32") {
     fs.chmodSync(file, 0o600);
