@@ -9,291 +9,132 @@
 
 通过本地 **OpenAI 兼容 API** 运行你自己的 [Arena.ai](https://arena.ai) Agent Mode 会话。
 
-本项目在 [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge) 的浏览器/会话桥接基础上，增加了：
+任何说 OpenAI 协议的客户端都能驱动一段持久化的 Arena 对话；如果启用可选的本地 MCP 通道，还能让该 Agent
+直接读写你工作区里的文件。
 
-- 持久化 Arena Session；
-- 批量 Session 采集；
-- 模型识别；
-- 模型结果归档；
-- 批量 Prompt 测试；
-- 本地运维界面。
-
-> **项目状态：早期 OSS。** Arena 的网页应用和未公开的运行时行为可能随时变化。当 Arena 修改前端、认证流程或遥测格式时，本项目可能需要维护更新。
+> **项目状态：早期 OSS。** Bridge 依赖 Arena 的网页应用与未公开的运行时行为，两者都可能随时变化。
+> 参见[限制](#限制)。
 
 ## 工作方式
 
 ~~~text
 你的本地 Agent / 客户端
-        │
-        │ OpenAI 兼容 HTTP
+        │  OpenAI 兼容 HTTP
         ▼
-┌──────────────────────────┐
-│     Arena Local Bridge   │
-│                          │
-│  Session 管理            │
-│  浏览器自动化            │
-│  OpenAI 兼容 API         │
-│  采集 / 测试             │
-│  模型归档                │
-└────────────┬─────────────┘
-             │
-             ▼
-        arena.ai Agent Mode
+┌──────────────────────────────────────────────┐
+│               Arena Local Bridge             │
+│  持久化 Session · 模型识别                    │
+│  账号池 · 采集 · 批量测试                     │
+└───────────────────────┬──────────────────────┘
+                        │  浏览器自动化
+                        ▼
+                 arena.ai Agent Mode
 ~~~
 
-Bridge 默认绑定到 127.0.0.1，并提供：
+默认绑定 `127.0.0.1`，对外提供：
 
 | 接口 | 用途 |
 | --- | --- |
-| GET /health | 健康检查 |
-| GET /v1/models | 本地模型列表 |
-| POST /v1/chat/completions | OpenAI 兼容聊天接口 |
-| GET / | 本地运维界面 |
+| `GET /health` | 健康检查 |
+| `GET /v1/models` | 本地模型列表 |
+| `POST /v1/chat/completions` | OpenAI 兼容聊天接口 |
+| `GET /` | 本地运维界面 |
 
 ## 环境要求
 
 - Node.js **20+**
-- 你有权使用的 Arena.ai 账号
-- 主机上有一个 Chromium 内核浏览器 —— **Chrome 或 Edge 就够**。启动时会自动探测；
-  Playwright 自带的 Chromium 只是兜底，不是必需项
+- 一个你有权使用的 Arena.ai 账号
+- 主机上有一个 Chromium 内核浏览器 —— **Chrome 或 Edge 就够**；Playwright 自带的 Chromium 只是兜底：
+  `npx playwright install chromium`
 
-本项目面向你自己的**账号**。它不提供 Arena API Key，也不绕过账号认证。
+本项目面向你自己的**账号**。它不提供 Arena API Key，也不绕过账号认证或配额。
 
 ## 快速开始
 
 ~~~bash
 git clone https://github.com/Gandhara2077/arena-local-bridge.git
 cd arena-local-bridge
-
 npm install
-
-# 只有当你既没有 Chrome 也没有 Edge 时才需要这一行 —— 见下面「浏览器」
-npx playwright install chromium
 
 node bin/login.mjs --email you@example.com --password 'your-password'
 node src/index.mjs
 ~~~
 
-服务默认监听：
+然后打开 <http://127.0.0.1:20140> 使用本地运维界面。需要内置 GUI 启动器时，用 `bash install.sh`，
+Windows 上用 `start-gui.bat`。
 
-http://127.0.0.1:20140
+## 使用 API
 
-如果需要使用内置 GUI，可在支持的平台上使用对应的启动辅助脚本：
-
-~~~bash
-bash install.sh
-~~~
-
-Windows：
-
-~~~text
-start-gui.bat
-~~~
-
-详细的 Agent 工作流见 [SKILL.md](SKILL.md)。
-
-## 浏览器
-
-启动时依次探测**本机已装**的 Chrome → Edge → Playwright 之前下载过的 Chromium，找到就用它。要指定某一个：
+先设置 Bearer Key，然后把任意 OpenAI 兼容客户端指向 `http://127.0.0.1:20140/v1`：
 
 ~~~bash
-export ARENA_AGENT_CHROME="C:\Program Files\Google\Chrome\Application\chrome.exe"   # Windows
-export ARENA_AGENT_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"   # macOS
+export ARENA_AGENT_BRIDGE_KEY='replace-with-a-random-secret'
+
+curl -X POST http://127.0.0.1:20140/v1/chat/completions \
+  -H "Authorization: Bearer $ARENA_AGENT_BRIDGE_KEY" \
+  -H "Content-Type: application/json" \
+  -H "x-codex-session-id: agent-01" \
+  -d '{"model":"agent","stream":false,"messages":[{"role":"user","content":"Hello"}]}'
 ~~~
 
-一个都没找到时，bridge 会说明它找过哪些位置然后停下，**不会**替你下载浏览器。
+`x-codex-session-id` 保持不变，就能让每个客户端对话对应一段持久化的 Arena Session。
 
-## 便携发行（不含 Chromium）
+## 功能
 
-给没有装 Node 的机器，可以打一个自包含压缩包（应用 + Node 运行时 + 启动器）：
+- **持久化 Session** —— 每个客户端对话对应一段 Arena Session，用请求头区分。
+- **模型池** —— 按识别出的 Model 归组 Session，可按需重新识别。
+- **账号池** —— 多账号按优先级调度、失败自动转移；确实无法服务的账号会被带着原因禁用，
+  而不是被当作可用账号继续驱动。
+- **模型识别** —— 模型名与推理档位取自 Arena 页面自己已经在发的流量，不需要 run token，也不产生额外请求。
+- **本地 MCP** —— 可选。通道启动后，Agent 会被告知工作位置，并能读写你的工作区文件。
+  在消息真正交给 Arena 之前失败的 turn 不会消耗一次性前言。
+- **采集与批量测试** —— 批量创建与驱动 Session。
+- **本地运维界面** —— Session、模型池、绑定、账号与额度一目了然。
+
+## 便携发行
+
+给没有装 Node 的机器打一个自包含压缩包：
 
 ~~~bash
 npm run package:portable -- --node "C:\Program Files\nodejs"
 ~~~
 
-产物在 `dist/`（解压后约 106 MB、压缩后约 36 MB；若把 Playwright 的 Chromium 打进去会是 350–700 MB，这就是不打的原因）。
-解压后双击 **`start-gui.bat`** —— 它是一个启动器：拉起 bridge 并打开本地界面。这是 Node 应用，
-没有单文件原生 exe，也没有安装程序；包内任何东西都不会联网下载，驱动的仍然是你机器上已有的浏览器。
+解压 `dist/` 后双击 **`start-gui.bat`**。这是 Node 应用，所以没有单文件 exe，也没有安装程序；
+包内任何东西都不会联网下载，驱动的仍然是你机器上已有的浏览器。
 
-目前这个压缩包是 **Windows 产物** —— 这就是发行面向的平台，`start-gui.bat` 也是它唯一带的启动器。
-bridge 本身在 Node 能跑的地方都能跑（`node src/index.mjs`，可用包里的 `runtime/node`），
-所以 macOS / Linux 用户也能用，但那不是我们打好的那条路。
+## 文档
 
-## API 示例
+| 文档 | 内容 |
+| --- | --- |
+| [SKILL.md](SKILL.md) | 详细工作流：API、Session 与模型池、账号、本地 MCP、故障排查 |
+| [SECURITY.md](SECURITY.md) | 安全模型、数据流向，以及如何上报漏洞 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发、测试与仓库结构 |
+| [NOTICE.md](NOTICE.md) | 上游来源与致谢 |
 
-首先设置本地 Bearer Key：
+## 安全
 
-~~~bash
-export ARENA_AGENT_BRIDGE_KEY='replace-with-a-random-secret'
-~~~
-
-然后：
-
-~~~bash
-curl -X POST http://127.0.0.1:20140/v1/chat/completions \
-  -H "Authorization: Bearer $ARENA_AGENT_BRIDGE_KEY" \
-  -H "Content-Type: application/json" \
-  -H "x-codex-session-id: agent-01" \
-  -d '{
-    "model": "agent",
-    "stream": false,
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-~~~
-
-x-codex-session-id Header 用于让客户端保持相互独立的持久化 Arena Session。
-
-## 仓库结构
-
-~~~text
-src/        核心 Bridge、服务器、浏览器/Session 管理、采集和 UI
-bin/        登录、Session、验证和诊断辅助工具
-test/       Node.js 测试套件
-prompts/    可选安装 Prompt
-assets/     公共项目资源
-~~~
-
-## 模型识别
-
-Arena 的面向用户的盲测 UI 通常不会直接公开底层模型名称。
-
-本仓库自带页面探针。它挂在页面自身的网络流量上，因此模型名与推理档位都来自页面自己拉取的 trace——不需要 run token，也不产生额外请求。
-
-- 源码位于 `src/probe/modules/*.js`；
-- `bin/build-probe.mjs` 把这些模块组装成单文件 `assets/arena-model-probe.inject.js`；
-- `src/probe/index.mjs` 暴露 `installProbe(page)` 与 `readSnapshot(page)`；`readSnapshot` 是全项目唯一读取页面的地方。
-
-模型识别依赖 Arena 当前的运行时行为，因此不应将其视为永久稳定的公开 API。
-
-## 模型池
-
-归档后的 Session 会按 **Model Pool（模型池）** 展示：每个池对应一个 Model，并包含所有被识别为该 Model 的 Session。无法识别 Model 的 Session 不会被视为一个 Model，而是进入单独的**未识别**池；你可以按需重新执行识别（补标）。
-
-模型池是一个**索引，而不是调度器**。它不会替你选择 Session，因为对话上下文存在于 Arena 侧，并绑定到某个具体 Session；如果静默切换 Session，就会丢失原有上下文。你负责选择，模型池负责帮助你查看和找回已有 Session。
-
-### Session 绑定
-
-当客户端将某个 Session UUID 作为 model 传入时，这是一次显式选择，Bridge 会在客户端对话 ID 与该 Session 之间建立**绑定**。客户端对话 ID 来自 x-codex-session-id Request Header，并在不存在时回退到 x-arena-session-id。之后带有相同 Header 的请求会继续使用同一个 Session，从而保持对话上下文。
-
-- 只有显式选择才会创建绑定。model: "active" **不会**创建绑定。
-- 如果已绑定的 Session 后来被标记为 suspected-dead，请求会返回 **409 bound_session_dead**，而不是静默切换到另一个 Session 并用不同的对话回答。此时应选择其他 Session，或删除该绑定。
-- GET /api/pool/bindings 列出当前绑定；GUI 会在“会话绑定”中显示它们。POST /api/pool/unbind（Body：{"clientId": "…"}）可以删除一个绑定。
-
-### Session 健康状态
-
-GET /api/sessions 除扁平化的 sessions 列表外，还会返回 groups（模型池）。每个 Session 都带有 ok 或 suspected-dead 状态。
-
-- 只有当针对某个 Session 的请求实际失败时，该 Session 才会被标记为 **suspected-dead**。这是唯一可信的信号：没有基于时间的衰减，也没有健康分数。
-- POST /api/pool/verify（Body：{"sessionId": "<uuid>"}）会通过发送**一次真实 turn**并使用唯一 nonce 进行手动检查，然后将 Session 标记为存活或 suspected-dead。仅仅能够渲染页面并不能证明 Session 仍然可以回答，因此必须真的发问；nonce 用于保证每次都是一次独立的 turn。（已完成的 turn 只有在请求带上 `x-arena-idempotency-key` 时才会被重放，所以单纯的文本相同不会短路掉一次新的 turn。）**该操作会向 Session 的 transcript 追加一条简短消息。** 这是手动操作：不会后台轮询，因此不会替你消耗 Session 生命周期。
-- POST /api/pool/reprobe（Body：{"sessionId": "<uuid>"}）会重新执行指定 Session 的模型识别；如果识别到 Model，则会将结果写回 记录.json。
-
-健康状态保存在数据目录中的 sidecar 文件（pool-state.json），其中只保存 Session 状态和绑定关系。记录.json 仍然是 Session 数据的唯一事实来源；删除 sidecar 后，每个 Session 都会重新显示为 ok。
-
-## 账号
-
-成功登录**不等于**账号可用。Arena 可能对某个账号进行限制，但登录接口仍返回 200 并下发有效认证 Cookie；之后该账号的 Session 实际上会以访客身份提供服务。因此，login() 会进一步访问 /agent，检查服务器返回的数据是否包含该账号自己的邮箱。该检查已经针对一个已知受限账号和一个已知正常账号进行验证，并可以区分二者。
-
-因此，Bridge 维护一个**账号池**，不会使用无法正常提供服务的账号：
-
-- 一个账号虽然可以登录，但未通过可用性检查时，会带有原因地被**禁用**，而不是继续把它当作可用账号驱动。/health 会列出所有账号及其状态。
-- 启动时，以及 Cookie 即将过期时，Bridge 会按照优先级遍历账号池，直到找到一个既能登录又可用的账号。被拒绝的账号会跳过并尝试下一个。
-- node bin/accounts.mjs list | add | disable | enable | priority 用于管理账号池。add 会先验证账号，再保存它。数值越小优先级越高；0 是有效值。
-- 一个成功登录的账号会自动重新启用，因此恢复不需要手动操作。
-
-如果所有账号最终都被禁用，Bridge 会拒绝启动，而不是驱动一个失效 Session，并说明各账号失败的原因。
-
-## 本地 MCP（让 Arena Agent 操作本地工作区）
-
-当本地 AgentDock MCP Tunnel 已启动时，Bridge 会向 Session 前置发送一段简短的 preamble，使 Agent 知道工作位置以及“交付文件”的含义：
-
-~~~
-[本地 MCP 已接入] endpoint: https://<tunnel>/mcp
-header: Authorization: Bearer <token>
-本地工作区: <your workspace>
-约定:
-1) 读写本地文件一律走 MCP 工具（read_file / list_dir / search_text / file_edit / exec_command）。
-2) 一律传绝对路径：相对路径不会落到工作区（自建 MCP 直接拒绝；旧 AgentDock 会解析到 ~/AgentDock）。
-3) 你生成的文件必须写回本地（file_edit action=add 或 replace），不要只在回复里贴内容。
-4) 需要交付给人的产物用 file_publish 发布成 artifact。
-~~~
-
-**为什么有第 2 条：** 相对路径永远不会落到工作区。当前的 AgentDock 上游会把相对路径解析到
-`~/AgentDock`（不是你的项目）；我们自建的 MCP 服务器（上游替换工作）则直接拒绝相对路径。
-两者结果一致：用相对路径写 `report.md` 都交付不到工作区，所以 preamble 只说一句「一律传绝对路径」。
-第 3 条存在的原因是：如果 Agent 只把生成内容贴在回复中，就不能算真正交付了文件。
-
-**工作区的来源**按以下优先级排列：
-
-1. **调用方的 Request Header** x-arena-workspace —— 始终优先。
-2. **从 Codex Session 自动发现。** Codex 会为每个对话在 ~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<sessionId>.jsonl 保存一个 transcript，其中记录运行时的工作目录。Codex 会将同一个 ID 作为 x-codex-session-id 发送，因此 Bridge 可以**无需客户端额外配置**地恢复当前对话所属目录——每个项目的 Codex 运行都会自动报告自己的路径。如果 Codex 数据位于其他位置，可以通过 ARENA_CODEX_SESSIONS_DIR 覆盖根目录。
-3. ARENA_MCP_WORKSPACE，或者位于 archive-dir.txt 同目录的纯文本文件 mcp-workspace.txt（启动器会像读取 ARENA_ARCHIVE_DIR 一样读取它）。
-4. 以上都不适用 → preamble 不包含工作区信息。
-
-检测机制不会猜测：无法识别的 Session ID 会解析为空并继续回退，因此缺失 transcript 不会静默地把 Agent 指向错误项目。这也是“最近只有一个活跃 transcript”回退机制在近期存在多个 transcript 时保持静默的原因——两个活跃对话无法可靠归属于其中任何一个调用方。Bridge 会记录实际使用的来源（workspaceFrom: request-header | codex-session | codex-recent | config | none）。
-
-**手动重注入有一条边界。** 面板上的「重注入」按钮不带任何请求、也没有属于它自己的 Codex 会话，因此它只能复用 Bridge 在服务这个 Session 的过程中已经学到的东西。所以「这个 Session 从未在本 Bridge 上跑过 turn」+「近期有多个 transcript」同时成立时，没有任何依据可以归属，按钮会直接拒绝（“没认出工作区”）而不是猜。两条出路：在目标项目里跑一轮真实对话（从此 Bridge 记住这个 Session 属于哪个目录），或者用 `ARENA_MCP_WORKSPACE` / `mcp-workspace.txt` 给一个默认值（上面第 3 条在这里同样适用）。
-
-> **依赖实现细节：** Codex 自动发现读取 Codex 自己的磁盘 transcript（~/.codex/sessions/…/rollout-*.jsonl 及其 cwd 字段）。该目录结构属于未公开文档，也不是公开接口，因此任何 Codex 版本都可能改变它。功能失效时会退化为“无工作区”，而不会指向错误项目；ARENA_MCP_WORKSPACE 和 Request Header 仍然是稳定的配置路径。如果 Codex 数据存储在其他位置，可以设置 ARENA_CODEX_SESSIONS_DIR。
-
-需要注意的是，本地客户端与 Bridge 之间的代理可能会完全丢弃自定义 Header。如果配置的 Header 始终没有出现，请检查 Bridge 的 workspace hints 日志行，其中会报告实际收到的 x-* Header。使用代理或 Gateway 时，请确保它保留客户端集成所需的 Request Header。
-
-Header 只接受**绝对路径**（盘符路径、UNC 或 POSIX 路径）。相对路径会被忽略而不会继续转发，
-因为相对路径永远不会落到工作区——AgentDock 会将其解析到 `~/AgentDock`，我们自建的 MCP 服务器
-则直接拒绝。
-
-Header 会在注入 preamble 的那个 turn 中读取，因此客户端如果每次请求都发送它，不需要额外处理。内部探针（体检）**不会**消耗一次性的 preamble；在消息真正交给 Arena 之前就失败的 turn 同样不会 —— 只有发出去了才算送达，所以一次失败的 turn 不会让你白点一次重注入。
-
-Preamble **每个 Session 只发送一次**，并且只在 Tunnel 正常运行时发送；它被刻意保持简短，因为过长的首条消息会提高 Arena 触发 reCAPTCHA 的风险。
-
-## 安全模型
-
-Bridge 会处理高度敏感的本地数据，因为它保存 Arena 的认证状态。
-
-- 凭据使用 AES-256-GCM 加密保存。
-- 凭据文件写入后只保留本人可访问：POSIX 用 `0600`，Windows 用 `icacls`（Windows 不实现 POSIX 权限位，只有 ACL 真的生效）。要么收紧到本人可访问，要么就不写——设置权限失败时写入直接失败，不会留下一个「文档说是私有、文件系统说不是」的文件。
-- HTTP 服务默认绑定到 127.0.0.1。
-- 运行时状态、Cookie、凭据、.env 文件和 Tunnel 元数据都通过 .gitignore 排除。
-- **不要**将本地 HTTP 端口暴露给不可信网络。
-- API 访问使用强随机的 ARENA_AGENT_BRIDGE_KEY。
-- 在共享机器上部署 Bridge 前，请阅读 SECURITY.md。
-
-### 数据流
-
-正常运行时会与 Arena.ai 通信。
-
-模型识别 fallback 还可能使用当前 Arena Session 暴露的公开 run token 查询 **trigger.dev** 的 run/trace 接口。这是模型识别机制的一部分，在评估隐私和可用性时应将其纳入考虑。
-
-可选的代理 / Tunnel 集成可能引入额外的网络目的地；只有在理解其信任模型后才应启用。
+凭据以 AES-256-GCM 加密保存，凭据文件写入后只保留本人可访问。HTTP 服务绑定 `127.0.0.1`：
+**不要**把这个端口暴露给不可信网络，并使用足够强的 `ARENA_AGENT_BRIDGE_KEY`。在共享机器上运行前请先阅读
+[SECURITY.md](SECURITY.md)。
 
 ## 开发
-
-使用以下命令运行测试套件：
 
 ~~~bash
 npm test
 ~~~
 
-仓库使用 Node 内置测试运行器。Pull Request 应保持测试套件通过，并针对难以手动验证的行为增加回归测试。
+使用 Node 内置测试运行器。请保持测试套件通过，并针对难以手动验证的行为补充回归测试。
 
 ## 限制
 
-本项目依赖 Arena.ai 未必作为稳定公开 API 文档化的行为，尤其包括：
-
-- 浏览器 Selector 和页面结构可能变化；
-- 认证和反自动化行为可能变化；
-- 运行时 Trace 格式可能变化；
-- 模型识别行为可能变化；
-- Arena 账号或服务策略可能变化。
-
-本项目不保证兼容未来的 Arena 版本。
+本项目依赖 Arena 并未作为稳定公开 API 文档化的行为 —— 浏览器 Selector 与页面结构、认证与反自动化行为、
+运行时 Trace 格式都可能变化。本项目不保证兼容未来的 Arena 版本。
 
 ## 来源与致谢
 
-核心 Bridge 源自 [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge)，该项目采用 MIT License。其版权声明记录在 [NOTICE.md](NOTICE.md)。
-
-模型识别探针是本项目自身代码：源码位于 `src/probe/`，由 `bin/build-probe.mjs` 组装成单文件产物 `assets/arena-model-probe.inject.js`，随本仓库分发。
+核心 Bridge 源自 [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge)
+（MIT License），其版权声明记录在 [NOTICE.md](NOTICE.md)。模型识别探针是本项目自身代码，
+以单文件产物 `assets/arena-model-probe.inject.js` 随仓库分发。
 
 ## 许可证
 

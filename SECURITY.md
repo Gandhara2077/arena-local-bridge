@@ -16,6 +16,28 @@ Until a dedicated security contact is configured, report suspected vulnerabiliti
 - impact assessment;
 - any relevant logs with secrets removed.
 
+## How the bridge protects local data
+
+- Arena credentials are encrypted at rest with AES-256-GCM.
+- Credential files are written owner-only: mode `0600` on POSIX, and via `icacls` on Windows (which has no POSIX
+  mode bits, so an ACL is the only mechanism that works there). A secret is written owner-only **or not written
+  at all** — if the permissions cannot be set, the write fails rather than leaving a file the documentation calls
+  private and the filesystem does not.
+- The HTTP service binds to `127.0.0.1` by default and rejects requests whose Host and Origin are not loopback,
+  so the API is not reachable from another host by accident.
+- Runtime state, cookies, credentials, `.env` files and tunnel metadata are excluded by `.gitignore`.
+
+## Data flows
+
+Normal operation communicates with Arena.ai.
+
+The model-identification fallback can additionally query **trigger.dev** run/trace endpoints, using the public run
+token exposed by the current Arena session. This is an intentional part of the identification mechanism and should
+be considered when evaluating privacy and availability.
+
+Optional proxy/tunnel integrations can introduce additional network destinations; enable them only when you
+understand their trust model.
+
 ## Operational guidance
 
 - Keep the bridge bound to 127.0.0.1 unless an authenticated trusted proxy is used.

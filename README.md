@@ -9,368 +9,137 @@
 
 Run your own [Arena.ai](https://arena.ai) Agent Mode sessions through a local **OpenAI-compatible API**.
 
-The project combines the browser/session bridge from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge) with additional local tooling for:
+Any client that speaks the OpenAI protocol can drive a persistent Arena conversation — and, with the optional
+local MCP tunnel, let that agent read and write files in your own workspace.
 
-- persistent Arena sessions;
-- batch session harvesting;
-- model identification;
-- model-result archival;
-- batch prompt testing;
-- a local operations UI.
-
-> **Project status:** early-stage OSS. Arena's web application and undocumented runtime behavior can change without notice. Expect maintenance when Arena changes its frontend, authentication flow, or telemetry format.
+> **Project status:** early-stage OSS. The bridge depends on Arena's web application and undocumented runtime
+> behaviour, both of which can change without notice. See [Limitations](#limitations).
 
 ## What it does
 
 ~~~text
-Your local agent / client
-        │
-        │ OpenAI-compatible HTTP
+your local agent / client
+        │  OpenAI-compatible HTTP
         ▼
-┌──────────────────────────┐
-│     Arena Local Bridge   │
-│                          │
-│  session management      │
-│  browser automation      │
-│  OpenAI-compatible API   │
-│  harvesting / testing    │
-│  model archival          │
-└────────────┬─────────────┘
-             │
-             ▼
-        arena.ai Agent Mode
+┌──────────────────────────────────────────────┐
+│               Arena Local Bridge             │
+│  persistent sessions · model identification  │
+│  account pool · harvesting · batch testing   │
+└───────────────────────┬──────────────────────┘
+                        │  browser automation
+                        ▼
+                 arena.ai Agent Mode
 ~~~
 
-The bridge binds to 127.0.0.1 by default and exposes:
+It binds to `127.0.0.1` by default and exposes:
 
 | Endpoint | Purpose |
 | --- | --- |
-| GET /health | Health check |
-| GET /v1/models | Local model list |
-| POST /v1/chat/completions | OpenAI-compatible chat endpoint |
-| GET / | Local operations UI |
+| `GET /health` | Health check |
+| `GET /v1/models` | Local model list |
+| `POST /v1/chat/completions` | OpenAI-compatible chat |
+| `GET /` | Local operations UI |
 
 ## Requirements
 
 - Node.js **20+**
 - An Arena.ai account that you are authorized to use
-- A Chromium-based browser on the host — **Chrome or Edge is enough**. The bridge detects one on startup;
-  Playwright's own Chromium is only a fallback, not a requirement
+- A Chromium-based browser on the host — **Chrome or Edge is enough**. Playwright's own Chromium is only a
+  fallback: `npx playwright install chromium`
 
-The project is intended for your **own account**. It does not provide an Arena API key or bypass account authentication.
+The bridge is for **your own account**. It provides no Arena API key and does not bypass authentication or quotas.
 
 ## Quick start
 
 ~~~bash
 git clone https://github.com/Gandhara2077/arena-local-bridge.git
 cd arena-local-bridge
-
 npm install
-
-# Only needed if you have neither Chrome nor Edge — see "Browser" below.
-npx playwright install chromium
 
 node bin/login.mjs --email you@example.com --password 'your-password'
 node src/index.mjs
 ~~~
 
-The service listens on:
+Open <http://127.0.0.1:20140> for the local operations UI. For the bundled GUI launcher use `bash install.sh`,
+or `start-gui.bat` on Windows.
 
-http://127.0.0.1:20140
+## Using the API
 
-For the bundled GUI, use the platform-specific startup helper where available:
-
-~~~bash
-bash install.sh
-~~~
-
-or on Windows:
-
-~~~text
-start-gui.bat
-~~~
-
-See [SKILL.md](SKILL.md) for the detailed agent-oriented workflow.
-
-## Browser
-
-On startup the bridge looks for a Chromium-based browser that is **already installed** — Chrome first, then Edge,
-then one Playwright may have downloaded earlier — and uses that. Point at a specific one with:
+Set a bearer key, then point any OpenAI-compatible client at `http://127.0.0.1:20140/v1`:
 
 ~~~bash
-export ARENA_AGENT_CHROME="C:\Program Files\Google\Chrome\Application\chrome.exe"   # Windows
-export ARENA_AGENT_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"   # macOS
+export ARENA_AGENT_BRIDGE_KEY='replace-with-a-random-secret'
+
+curl -X POST http://127.0.0.1:20140/v1/chat/completions \
+  -H "Authorization: Bearer $ARENA_AGENT_BRIDGE_KEY" \
+  -H "Content-Type: application/json" \
+  -H "x-codex-session-id: agent-01" \
+  -d '{"model":"agent","stream":false,"messages":[{"role":"user","content":"Hello"}]}'
 ~~~
 
-If nothing is found the bridge says where it looked and stops. It never downloads a browser on your behalf.
+A stable `x-codex-session-id` keeps one persistent Arena session per client conversation.
 
-## Portable release (no Chromium)
+## Features
 
-For a machine without a Node install, build a self-contained archive — the app, a Node runtime and the launcher:
+- **Persistent sessions** — one Arena session per client conversation, keyed by a request header.
+- **Model pools** — sessions grouped by identified model, with on-demand re-identification.
+- **Account pool** — several accounts with priority and failover; an account that cannot actually be served is
+  disabled with a reason instead of being driven as if it worked.
+- **Model identification** — the model name and reasoning tier come from the page traffic Arena already sends,
+  so no run token and no extra request are needed.
+- **Local MCP** — optional. When the tunnel is up, the agent is told where to work and can read and write files
+  in your workspace. A turn that fails before Arena receives the message does not spend the one-shot preamble.
+- **Harvesting and batch testing** — create and drive many sessions at once.
+- **Local operations UI** — sessions, pools, bindings, accounts and quota at a glance.
+
+## Portable release
+
+For a machine without Node, build a self-contained archive:
 
 ~~~bash
 npm run package:portable -- --node "C:\Program Files\nodejs"
 ~~~
 
-The archive lands in `dist/` (~80 MB unpacked is ~106 MB, zipped ~36 MB; with Playwright's Chromium inside it would be
-350–700 MB, which is why there is none). Unzip it and double-click **`start-gui.bat`** — that is a launcher that starts
-the bridge and opens the local UI; this is a Node application, so there is no single-file native `.exe` and no installer.
-Nothing in the archive downloads anything, and the browser it drives is still the one already on your machine.
+Unzip `dist/` and double-click **`start-gui.bat`**. This is a Node application, so there is no single-file
+`.exe` and no installer; nothing in the archive downloads anything, and the browser it drives is still the one
+already on your machine.
 
-The archive is a **Windows** artifact today — that is the platform the release targets, and `start-gui.bat` is the only
-launcher it ships. The bridge itself runs anywhere Node does (`node src/index.mjs`, with `runtime/node` from the
-archive), so a macOS or Linux user can use one, but they are not the packaged path.
+## Documentation
 
-## API example
+| Document | Covers |
+| --- | --- |
+| [SKILL.md](SKILL.md) | Detailed workflow: API, sessions and pools, accounts, local MCP, troubleshooting |
+| [SECURITY.md](SECURITY.md) | Security model, data flows, and how to report a vulnerability |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development, tests and repository layout |
+| [NOTICE.md](NOTICE.md) | Upstream attribution |
 
-Set a local bearer key first:
+## Security
 
-~~~bash
-export ARENA_AGENT_BRIDGE_KEY='replace-with-a-random-secret'
-~~~
-
-Then:
-
-~~~bash
-curl -X POST http://127.0.0.1:20140/v1/chat/completions \
-  -H "Authorization: Bearer $ARENA_AGENT_BRIDGE_KEY" \
-  -H "Content-Type: application/json" \
-  -H "x-codex-session-id: agent-01" \
-  -d '{
-    "model": "agent",
-    "stream": false,
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-~~~
-
-The x-codex-session-id header lets clients keep separate persistent Arena sessions.
-
-## Repository layout
-
-~~~text
-src/        Core bridge, server, browser/session handling, harvesting and UI
-bin/        Login, session, verification and diagnostic helpers
-test/       Node.js test suite
-prompts/    Optional installation prompts
-assets/     Public project assets
-~~~
-
-## Model identification
-
-Arena does not normally expose the underlying model name in its user-facing blind-battle UI.
-
-This repository ships its own page probe. It hooks the network traffic the page already performs, so the model name and the reasoning tier come from the trace the page fetched itself — no run token, no extra request.
-
-- source lives in `src/probe/modules/*.js`;
-- `bin/build-probe.mjs` assembles those modules into the single-file `assets/arena-model-probe.inject.js`;
-- `src/probe/index.mjs` exposes `installProbe(page)` and `readSnapshot(page)`; `readSnapshot` is the only place the project reads from a page.
-
-Model identification is inherently dependent on Arena's current runtime behavior and should not be treated as a permanent public API.
-
-## Model pools
-
-Archived sessions are presented as **model pools**: every pool is one Model, and holds all the
-Sessions identified as that Model. Sessions whose Model could not be identified are not a Model —
-they go into a separate **未识别** bucket, and you can re-run identification on demand (补标).
-
-A pool is an **index, not a scheduler**. It never picks a Session for you, because conversation
-context lives on the Arena side and is bound to one specific Session: switching Sessions silently
-would drop that context. You pick; the pool only helps you see what you have and find it again.
-
-### Session bindings
-
-When a client passes a session UUID as `model`, that is an explicit choice, and the bridge records
-a **binding** between the client's conversation id (from the `x-codex-session-id` request header,
-falling back to `x-arena-session-id`) and that Session. Later requests carrying the same header
-return to the same Session, so the conversation keeps its context.
-
-- Bindings are only created by an explicit choice. `model: "active"` does **not** bind.
-- If a bound Session is later marked suspected-dead, the request fails with **409
-  `bound_session_dead`** rather than silently switching to another Session and answering with a
-  different conversation. Pick another Session, or drop the binding.
-- `GET /api/pool/bindings` lists the current bindings; the GUI shows them under 会话绑定.
-  `POST /api/pool/unbind` (body: `{"clientId": "…"}`) drops one.
-
-### Session health
-
-`GET /api/sessions` returns `groups` (the pools) alongside the flat `sessions` list. Each Session
-carries a state of `ok` or `suspected-dead`.
-
-- A Session is marked **suspected-dead** when a request against it actually fails. That is the only
-  trusted signal: there is no time-based decay and no health score.
-- `POST /api/pool/verify` (body: `{"sessionId": "<uuid>"}`) runs a manual check by driving **one real
-  turn** with a unique nonce, then marking the session alive or suspected-dead. A page that merely
-  renders is not proof a session can still answer, so the check has to really ask something; the
-  nonce keeps every run a distinct turn. (A finished turn is replayed only when the request carries
-  `x-arena-idempotency-key`, so identical text alone never short-circuits a new turn.)
-  **This appends one short message to that session's transcript.** It is manual by design: no
-  background polling, so nothing burns session lifetime on your behalf.
-- `POST /api/pool/reprobe` (body: `{"sessionId": "<uuid>"}`) re-runs model identification for one
-  session and, if a Model is found, writes it back into `记录.json`.
-
-Health state is stored in a sidecar file (`pool-state.json` in the data directory) that holds only
-session state and bindings. `记录.json` remains the single source of truth for session data, and the
-sidecar can be deleted — every Session then simply reads as `ok` again.
-
-## Accounts
-
-Signing in successfully is **not** the same as having a usable account. Arena returns `200` from its
-sign-in endpoint and hands out a valid auth cookie for an account it has quietly restricted, then
-serves every session to that account as a visitor. `login()` therefore proves the session by
-fetching `/agent` and checking that the server payload carries the account's own email — that check
-was validated against a known-restricted account and a known-good one, and it flips between them.
-
-Because of that, the bridge keeps a **pool** of accounts and will not use one it cannot serve:
-
-- An account that signs in but fails the usability check is **disabled with a reason** instead of
-  being driven as if it worked. `/health` lists every account and its state.
-- At boot, and whenever a cookie approaches expiry, the bridge walks the pool by priority until one
-  account both signs in and is usable. A rejected account is skipped and the next one is tried.
-- `node bin/accounts.mjs list | add | disable | enable | priority` manages the pool. `add` verifies
-  the account before storing it. Lower `priority` wins; `0` is valid.
-- An account that logs in successfully is re-enabled automatically, so recovery needs no manual step.
-
-If every account ends up disabled, the bridge refuses to start rather than driving a dead session,
-and says which accounts failed and why.
-
-## Local MCP (letting the Arena agent work on this machine)
-
-When the local AgentDock MCP tunnel is up, the bridge prepends a short preamble to the session once,
-so the agent knows where to work and what "delivering a file" means:
-
-```
-[本地 MCP 已接入] endpoint: https://<tunnel>/mcp
-header: Authorization: Bearer <token>
-本地工作区: <your workspace>
-约定:
-1) 读写本地文件一律走 MCP 工具（read_file / list_dir / search_text / file_edit / exec_command）。
-2) 一律传绝对路径：相对路径不会落到工作区（自建 MCP 直接拒绝；旧 AgentDock 会解析到 ~/AgentDock）。
-3) 你生成的文件必须写回本地（file_edit action=add 或 replace），不要只在回复里贴内容。
-4) 需要交付给人的产物用 file_publish 发布成 artifact。
-```
-
-**Why rule 2 is there:** relative paths never land in the workspace. Today's AgentDock upstream
-resolves them against `~/AgentDock`, which is *not* your project; our own MCP server (the
-upstream-replacement work) rejects them outright. Either way, an agent that writes `report.md`
-with a relative path fails to deliver — so the preamble just says "absolute paths, always".
-Rule 3 exists because an agent that only pastes generated content into its reply has not delivered a file.
-
-**Where the workspace comes from**, highest priority first:
-
-1. **The caller's request header** `x-arena-workspace` — always wins when present.
-2. **Auto-detected from the Codex session.** Codex writes one transcript per conversation at
-   `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<sessionId>.jsonl`, and the transcript records the
-   working directory it ran in. Codex sends that same id as `x-codex-session-id`, so the bridge can
-   recover the directory this conversation belongs to **with no client-side configuration at all** —
-   each project's Codex run reports its own path automatically. Override the root with
-   `ARENA_CODEX_SESSIONS_DIR` if your Codex data lives elsewhere.
-3. `ARENA_MCP_WORKSPACE`, or a plain-text file named `mcp-workspace.txt` next to `archive-dir.txt`
-   (the launcher picks it up the same way it picks up `ARENA_ARCHIVE_DIR`).
-4. None apply → the preamble omits the workspace line.
-
-Detection never guesses: an unrecognised session id resolves to nothing and falls through, so a
-missing transcript cannot silently point the agent at the wrong project. That is also why the
-"single active transcript" fallback stays silent whenever more than one transcript was written
-recently — two active conversations cannot be attributed to either caller. The bridge logs which
-source it used (`workspaceFrom: request-header | codex-session | codex-recent | config | none`).
-
-**The manual re-injection has one boundary.** The dashboard's *re-inject* button carries no request and
-no Codex conversation of its own, so it can only reuse what the bridge already learned while serving
-that Session. A Session that has **never** been served a turn here, combined with **more than one**
-recently written transcript, therefore has nothing to attribute it to — and the button refuses
-("没认出工作区") rather than guess. Two ways out: run one real turn in the target project, which teaches
-the bridge which directory that Session belongs to, or give a default via `ARENA_MCP_WORKSPACE` /
-`mcp-workspace.txt` (priority 3 above applies here too).
-
-> **Implementation-dependent:** the Codex detection reads Codex's own on-disk transcripts
-> (`~/.codex/sessions/…/rollout-*.jsonl` and their `cwd` field). That layout is undocumented and not
-> a public interface, so it can change with any Codex release. When it breaks, the feature degrades
-> to "no workspace" rather than a wrong one, and `ARENA_MCP_WORKSPACE` / the request header remain
-> the stable paths. Set `ARENA_CODEX_SESSIONS_DIR` if Codex stores its data elsewhere.
-
-Note that a local proxy between the client and this bridge can drop custom headers entirely. If a
-header you configured never shows up, check the bridge's `workspace hints` log line, which reports
-the `x-*` headers that actually arrived. When using a proxy or gateway, make sure it preserves the
-request headers required by your client integration.
-
-Only **absolute** paths are accepted from the header (drive letter, UNC, or POSIX). A relative path is
-ignored rather than forwarded, because relative paths never land in the workspace — AgentDock would
-resolve them against `~/AgentDock`, and our own MCP server rejects them outright.
-
-The header is read on the turn that injects the preamble, so a client that sends it on every request
-needs no extra care. Internal probes (`体检`) do **not** consume the one-shot preamble, and neither does
-a turn that fails before Arena receives the message: it is spent only once the prompt is really out, so
-a failed turn does not cost you a re-injection.
-
-The preamble is sent **once per session**, and only while the tunnel is up; it is kept short on purpose
-because a long first message raises Arena's reCAPTCHA risk.
-
-### Read-only skill roots (optional)
-
-Beyond the workspace you can grant additional **read-only** directories — typically your global
-agent skills — via `ARENA_SKILL_ROOTS` (absolute paths, separated by the platform path delimiter:
-
-```
-# POSIX
-ARENA_SKILL_ROOTS=/home/me/.workbuddy/skills:/home/me/shared-prompts
-# Windows
-ARENA_SKILL_ROOTS=C:\Users\me\.workbuddy\skills;D:\shared-prompts
-```
-
-Unset means no read-only roots at all — nothing outside the workspace is readable. Explicit is the
-point: only the listed directories are opened, never the home wholesale. Entries must be absolute,
-must not overlap the workspace (a skill root that intersects it would silently be writable, so
-configuration is refused), and the bridge data directory is denied regardless.
-
-## Security model
-
-The bridge handles highly sensitive local data because it stores Arena authentication state.
-
-- Credentials are encrypted at rest with AES-256-GCM.
-- Credential files are written owner-only: mode `0600` on POSIX, and via `icacls` on Windows (which has no POSIX mode bits, so this is the only mechanism that works there). A secret is written owner-only **or not written at all** — if the permissions cannot be set, the write fails instead of leaving a file the documentation calls private and the filesystem does not.
-- The HTTP service binds to 127.0.0.1 by default.
-- Runtime state, cookies, credentials, .env files and tunnel metadata are excluded by .gitignore.
-- Do **not** expose the local HTTP port to an untrusted network.
-- Use a strong ARENA_AGENT_BRIDGE_KEY for API access.
-- Review SECURITY.md before deploying the bridge on a shared machine.
-
-### Data flows
-
-Normal operation communicates with Arena.ai.
-
-The model-identification fallback can additionally query **trigger.dev** run/trace endpoints using the public run token exposed by the current Arena session. This is an intentional part of the identification mechanism and should be considered when evaluating privacy and availability.
-
-Optional proxy/tunnel integrations can introduce additional network destinations; enable them only when you understand their trust model.
+Credentials are encrypted at rest with AES-256-GCM, and credential files are written owner-only. The HTTP
+service binds to `127.0.0.1`: do **not** expose the port to an untrusted network, and use a strong
+`ARENA_AGENT_BRIDGE_KEY`. Review [SECURITY.md](SECURITY.md) before running the bridge on a shared machine.
 
 ## Development
-
-Run the test suite with:
 
 ~~~bash
 npm test
 ~~~
 
-The repository uses Node's built-in test runner. Pull requests should keep the test suite passing and should add regression coverage for behavior that is difficult to validate manually.
+Node's built-in test runner. Keep the suite passing, and add regression coverage for behaviour that is hard to
+verify by hand.
 
 ## Limitations
 
-This project depends on behavior that Arena.ai does not necessarily document as a stable public API. In particular:
-
-- browser selectors and page structure can change;
-- authentication and anti-bot behavior can change;
-- runtime trace formats can change;
-- model-identification behavior can change;
-- Arena account or service policies can change.
-
-This project does not guarantee compatibility with future Arena releases.
+This project depends on Arena behaviour that is not documented as a stable public API — browser selectors and
+page structure, authentication and anti-bot behaviour, and runtime trace formats can all change. Compatibility
+with future Arena releases is not guaranteed.
 
 ## Attribution
 
-The core bridge is derived from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge), released under the MIT License. Its copyright notice is recorded in [NOTICE.md](NOTICE.md).
-
-The model-identification probe is part of this project: its source lives under `src/probe/` and `bin/build-probe.mjs` assembles it into the single-file artifact `assets/arena-model-probe.inject.js` that is shipped with the repository.
+The core bridge is derived from [parham7991/arena-account-bridge](https://github.com/parham7991/arena-account-bridge),
+released under the MIT License; its copyright notice is recorded in [NOTICE.md](NOTICE.md). The
+model-identification probe is part of this project and ships as the single-file artifact
+`assets/arena-model-probe.inject.js`.
 
 ## License
 
