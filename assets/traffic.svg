@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-labelledby="title desc">
+<title id="title">Arena Local Bridge repository traffic</title>
+<desc id="desc">Traffic history will be collected automatically by GitHub Actions.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.bg{fill:#fff;stroke:#d0d7de}.title{fill:#1f2328;font-size:24px;font-weight:700}.subtitle{fill:#656d76;font-size:13px}.card{fill:#f6f8fa;stroke:#d8dee4}.label{fill:#656d76;font-size:12px;font-weight:600}.value{fill:#1f2328;font-size:22px;font-weight:700}.empty{fill:#f6f8fa;stroke:#d8dee4}.empty-title{fill:#1f2328;font-size:17px;font-weight:600}.empty-text{fill:#656d76;font-size:12px}.footer{fill:#8c959f;font-size:10px}
+</style>
+<rect x=".5" y=".5" width="959" height="599" rx="16" class="bg"/>
+<text x="54" y="48" class="title">Repository Traffic</text>
+<text x="54" y="69" class="subtitle">Waiting for the first collection</text>
+<rect x="54" y="94" width="198" height="92" rx="12" class="card"/><text x="72" y="121" class="label">VIEWS · 14 DAYS</text><text x="72" y="153" class="value">—</text>
+<rect x="264" y="94" width="198" height="92" rx="12" class="card"/><text x="282" y="121" class="label">UNIQUE VISITORS</text><text x="282" y="153" class="value">—</text>
+<rect x="474" y="94" width="198" height="92" rx="12" class="card"/><text x="492" y="121" class="label">CLONES · 14 DAYS</text><text x="492" y="153" class="value">—</text>
+<rect x="684" y="94" width="222" height="92" rx="12" class="card"/><text x="702" y="121" class="label">UNIQUE CLONERS</text><text x="702" y="153" class="value">—</text>
+<rect x="54" y="232" width="852" height="326" rx="14" class="empty"/>
+<text x="480" y="370" text-anchor="middle" class="empty-title">Traffic history will appear here</text>
+<text x="480" y="397" text-anchor="middle" class="empty-text">The first scheduled or push-triggered collection will fetch GitHub's latest 14 days.</text>
+<text x="54" y="594" class="footer">Source: GitHub Repository Traffic API · daily history retained by this repository</text>
+</svg>
