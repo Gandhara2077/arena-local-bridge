@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { writeSecretFile, icaclsRestrictArgs, currentAccount } from "../src/secret.mjs";
+import { writeSecretFile, icaclsRestrictCommands, restrictSecretFile, currentAccount } from "../src/secret.mjs";
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -74,6 +74,16 @@ export function parseIcalsAces(stdout, file) {
   return aces;
 }
 
+// The ACL as icacls reports it: raw text for parseIcalsAces. `stdio: ignore` for
+// stdin only — a child spawned with a piped stdin hangs on this machine (EBUSY).
+function readAcl(file) {
+  return execFileSync("icacls", [file], {
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    windowsHide: true,
+  });
+}
+
 test("parseIcalsAces: reads the entries and ignores the localized footer", () => {
   const file = "D:/data/.arena-gui/auth-token.txt";
   const stdout = [`${file} PC-HOST\\me:(F)`, "", "已成功处理 1 个文件; 处理 0 个文件时失败", ""].join("\r\n");
@@ -94,20 +104,40 @@ test("parseIcalsAces: an inherited ACL shows up as other people having access", 
   assert.ok(aces.some((a) => a.identity === "NT AUTHORITY\\Authenticated Users"));
 });
 
-test("icaclsRestrictArgs: drops inheritance, drops the OS principals, grants only the given account", () => {
-  assert.deepEqual(icaclsRestrictArgs("D:/data/auth-token.txt", "PC-HOST\\me"), [
-    "D:/data/auth-token.txt",
-    "/inheritance:r",
-    // By SID, not by name: the display names are translated on a localized
-    // Windows. SYSTEM and Administrators arrive as EXPLICIT entries whenever the
-    // parent directory hands down nothing to inherit (the CI runner's temp dir),
-    // and /inheritance:r cannot remove those.
-    "/remove:g",
-    "*S-1-5-18",
-    "*S-1-5-32-544",
-    "/grant:r",
-    "PC-HOST\\me:(F)",
+test("icaclsRestrictCommands: resolve the account, reset the ACL, then leave only that account", () => {
+  assert.deepEqual(icaclsRestrictCommands("D:/data/auth-token.txt", "PC-HOST\\me"), [
+    // First, and non-destructively: the only step that can fail on a name it
+    // cannot resolve, so a bad account costs the file nothing.
+    ["D:/data/auth-token.txt", "/grant:r", "PC-HOST\\me:(F)"],
+    // Then drop every explicit entry (the one just added included), so nothing
+    // a bygone install or a hand-run icacls left behind can survive.
+    ["D:/data/auth-token.txt", "/reset"],
+    // And finally cut inheritance, leaving full control with this account alone.
+    ["D:/data/auth-token.txt", "/inheritance:r", "/grant:r", "PC-HOST\\me:(F)"],
   ]);
+});
+
+// The ticket-23 acceptance case: the entry three accounts try to hide behind.
+// `Authenticated Users` stands in for any third account, and nothing names it —
+// which is the point, since the fix cannot enumerate what it was not told about.
+test("restrictSecretFile: an explicit grant to a third account does not survive", {
+  skip: process.platform !== "win32" && "Windows 之外的平台只有 chmod，见上面那条",
+}, () => {
+  const file = path.join(tempDir("arena-secret-"), "auth-token.txt");
+  fs.writeFileSync(file, "0123456789abcdef");
+  execFileSync("icacls", [file, "/grant", "*S-1-5-11:(R)"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const planted = parseIcalsAces(readAcl(file), file);
+  assert.equal(planted.length > 1, true, "the sample must really carry a third-party entry");
+
+  restrictSecretFile(file);
+
+  const aces = parseIcalsAces(readAcl(file), file);
+  assert.equal(aces.length, 1, `expected one entry, got ${JSON.stringify(aces)}`);
+  assert.match(aces[0].identity, new RegExp(`(^|\\\\)${os.userInfo().username}$`, "i"));
+  assert.equal(aces[0].rights, "(F)");
 });
 
 test("currentAccount: names one account, qualified when a domain is known", () => {
@@ -118,13 +148,8 @@ test("currentAccount: names one account, qualified when a domain is known", () =
 // Windows: `mode: 0o600` and chmod are no-ops there, so what has to hold is the
 // ACL — one entry, ours, full control. Anything else still on the file (SYSTEM,
 // Administrators, Authenticated Users…) came from the directory and means the
-// secret is not owner-only.
-//
-// Scope: the tests below go through writeSecretFile, which creates the file it
-// then tightens. A file that ALREADY existed can carry explicit entries for
-// arbitrary accounts, and icaclsRestrictArgs does not remove those — see
-// restrictSecretFile's comment; ticket 23 owns closing that. So these must not be
-// read as "any file that passes through this module ends up owner-only".
+// secret is not owner-only. Ticket 23 widened this from "the files this module
+// creates" to every file it tightens: see the third-account case above.
 // The secret is either owner-only or absent. A file that the documentation calls
 // private and the filesystem does not is worse than a failed write, so the
 // failure has to reach the caller — and it must leave nothing behind.

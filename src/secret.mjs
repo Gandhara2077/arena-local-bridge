@@ -73,30 +73,54 @@ export function writeSecretFile(file, data) {
 // inherits `Authenticated Users:(M)`). icacls is the platform's mechanism, and
 // the one a Windows administrator would look for anyway.
 //
-// Pure, so the rule is assertable without a disk: drop the inherited entries,
-// drop the OS's own full-control principals, then grant full control to this
-// account and nobody else.
+// Pure, so the rule is assertable without a disk: THREE invocations, in order.
 //
-// The middle step is not redundant. `/inheritance:r` only removes entries the
-// file INHERITED — and Windows does not always give a new file any: when the
-// parent directory holds no inheritable ACE, CreateFile falls back to the
-// process token's default DACL, which is owner + Administrators + SYSTEM as
-// three EXPLICIT entries that `/inheritance:r` cannot touch. That is not a
-// hypothetical: the GitHub runner's temp directory is such a parent, so the
-// previous arguments produced a three-entry ACL in exactly the environment this
-// project's CI runs in, while a developer machine (whose temp directory does
-// hand ACEs down) came out at one. Naming the two by SID rather than by name
-// keeps it working on a localized Windows, where the display names are
-// translated.
-export function icaclsRestrictArgs(file, account) {
+//   1. `/grant:r` the account while the file still holds the ACL it arrived
+//      with. This is the only step that can fail for a reason we did not cause
+//      (a name icacls cannot resolve) and it is the one that changes nothing
+//      anybody else can see, which is what a caller that tightens a file it did
+//      NOT create needs: a failure here leaves the file exactly as found, and
+//      both of those callers carry on afterwards (see readOrCreateToken, and
+//      the existing-.env branch in index.mjs). Doing this after the reset below
+//      would instead strand the file with an EMPTY ACL, which on Windows the
+//      owner cannot even read (measured: EPERM) while still being able to
+//      repair it.
+//   2. `/reset` throws away every EXPLICIT entry and re-applies what the parent
+//      inherits — so afterwards only inherited entries are left, or nothing at
+//      all when the parent holds no inheritable ACE. It takes our own entry from
+//      step 1 with it, hence the grant again in step 3.
+//   3. `/inheritance:r` drops those inherited entries, and `/grant:r` then
+//      leaves full control with this account and nobody else.
+//
+// Three and not one, because icacls refuses to combine `/reset` with
+// `/inheritance` or `/grant` on a single command line — and it validates the
+// whole command line BEFORE acting, so it is a syntax refusal, not an ordering
+// surprise. Measured on this machine: exit 87 (ERROR_INVALID_PARAMETER), with
+// the file's ACL untouched.
+//
+// Why `/reset` at all: `/inheritance:r` only removes what the file INHERITED,
+// and `/grant:r` only replaces this account's own explicit grant, so every other
+// explicit entry survived. Neither half of that is hypothetical:
+//
+//   - a file this module CREATED: when the parent directory holds no inheritable
+//     ACE, Windows gives a new file the process token's default DACL — owner,
+//     Administrators and SYSTEM as three EXPLICIT entries. The GitHub runner's
+//     temp directory is such a parent, so the ACL came out three entries wide in
+//     exactly the environment this project's CI runs in.
+//   - a file this module did NOT create (an older install's .env or
+//     auth-token.txt, or one someone hand-tuned with `icacls /grant`): an
+//     explicit entry naming some third account stayed put, and the file was then
+//     not owner-only while the documentation said private.
+//
+// `/reset` covers both, and without naming anyone: it needs no list of
+// principals to remove, so there is nothing to translate on a localized Windows
+// and nothing to miss. It does not touch the OWNER — that is `/setowner` — so
+// one grant after it is enough.
+export function icaclsRestrictCommands(file, account) {
   return [
-    file,
-    "/inheritance:r",
-    "/remove:g",
-    "*S-1-5-18", // NT AUTHORITY\SYSTEM
-    "*S-1-5-32-544", // BUILTIN\Administrators
-    "/grant:r",
-    `${account}:(F)`,
+    [file, "/grant:r", `${account}:(F)`],
+    [file, "/reset"],
+    [file, "/inheritance:r", "/grant:r", `${account}:(F)`],
   ];
 }
 
@@ -108,23 +132,18 @@ export function currentAccount() {
   return domain && !name.includes("\\") ? `${domain}\\${name}` : name;
 }
 
-// Make one file owner-only, or say that you could not — with one documented
-// limit. What this removes is the inherited entries plus the OS's own two
-// full-control principals. An EXPLICIT entry naming some third account is NOT
-// removed, and `/inheritance:r` does not touch those either.
-//
-// That limit is invisible for a file we just created (writeSecretFile makes its
-// own, so there is nothing but the owner left — asserted by test/secret.test.mjs)
-// and reachable for a file we did not: readOrCreateToken and the startup .env
-// pass already-existing files here, and those can carry anything. Ticket 23 owns
-// closing that, and its acceptance is a test with a planted explicit ACE for a
-// third account.
+// Make one file owner-only, or say that you could not — for a file we just
+// created and for one we were merely handed alike. The second half of that is
+// what ticket 23 closed: `/reset` removes explicit entries too, so a grant to
+// some third account cannot survive whatever the file arrived carrying. See
+// icaclsRestrictCommands for the sequence and why it is three calls.
 //
 // Throwing rather than warning is deliberate: "we failed to protect it" is not
 // something a caller may go on believing succeeded, and only the caller knows
 // whether to abort. Callers that are tightening a file they did NOT create (a
 // copy left by an older version) may catch this and report it — see
-// readOrCreateToken.
+// readOrCreateToken. What such a caller can rely on is the other half: a
+// failure leaves the file with the ACL it came with, not a stripped one.
 export function restrictSecretFile(file) {
   if (process.platform !== "win32") {
     fs.chmodSync(file, 0o600);
@@ -132,7 +151,9 @@ export function restrictSecretFile(file) {
   }
   const account = currentAccount();
   try {
-    execFileSync("icacls", icaclsRestrictArgs(file, account), { windowsHide: true, stdio: "ignore" });
+    for (const args of icaclsRestrictCommands(file, account)) {
+      execFileSync("icacls", args, { windowsHide: true, stdio: "ignore" });
+    }
   } catch (error) {
     throw Object.assign(
       new Error(`could not make ${file} owner-only (${account}): ${String(error?.message || error)}`),
