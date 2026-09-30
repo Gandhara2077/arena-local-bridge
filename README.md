@@ -300,7 +300,9 @@ ignored rather than forwarded, because relative paths never land in the workspac
 resolve them against `~/AgentDock`, and our own MCP server rejects them outright.
 
 The header is read on the turn that injects the preamble, so a client that sends it on every request
-needs no extra care. Internal probes (`体检`) do **not** consume the one-shot preamble.
+needs no extra care. Internal probes (`体检`) do **not** consume the one-shot preamble, and neither does
+a turn that fails before Arena receives the message: it is spent only once the prompt is really out, so
+a failed turn does not cost you a re-injection.
 
 The preamble is sent **once per session**, and only while the tunnel is up; it is kept short on purpose
 because a long first message raises Arena's reCAPTCHA risk.

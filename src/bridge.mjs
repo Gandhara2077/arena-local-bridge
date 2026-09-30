@@ -62,9 +62,10 @@ export function prepareTurnInput({ sessionId, prompt, idempotencyKey = "" }) {
     inflightKey: `${sessionId}|${digest(prompt)}`,
     replayKey: identity ? `${sessionId}|${digest(`${identity}\n${prompt}`)}` : "",
     // Deferred on purpose: see the ordering comment in converse(). Everything a
-    // turn spends (the one-shot preamble, a pending manual re-injection) may be
-    // taken only once we know the turn really goes out — so the text that
-    // carries them is built then, not here.
+    // turn spends (the one-shot preamble, a pending manual re-injection) is
+    // decided when the turn is admitted but taken only once the prompt is
+    // actually Arena's, so the text that carries them is built there — see
+    // localCapabilityForTurn / commitLocalCapability.
     decorate: ({ preamble = "", marker = "" } = {}) => {
       let finalPrompt = preamble ? `${preamble}\n${prompt}` : prompt;
       if (marker) {
@@ -120,7 +121,8 @@ export class Bridge {
     this.mcpInjected = this.#loadMcpInjected();
     // Ticket 14 — sessions whose next turn must be told again, even though the
     // automatic injection already fired. Armed by /api/mcp/reinject, spent by
-    // the first real turn that follows (see localCapabilityForTurn).
+    // the first real turn that follows — see localCapabilityForTurn (which
+    // decides) and commitLocalCapability (which spends).
     this.mcpReinjectPending = new Set();
     // Which Codex conversation drives each Arena session, remembered from the
     // turns that came with the header. A manual re-injection has no request to
@@ -204,13 +206,23 @@ export class Bridge {
   }
 
   /**
-   * What THIS turn carries: the local-capability preamble (or "") plus what was
-   * decided, so callers can report it. Called while preparing every turn.
+   * What THIS turn would carry: the local-capability preamble (or "") plus what
+   * was decided, so callers can report it. DECIDES only — see
+   * commitLocalCapability for the half that spends it.
    *
    * A session is told once per endpoint (§4.25) — unless a manual re-injection
    * is pending for it, which forces one more and is then spent. Only a real
-   * turn reaches Arena, so THIS is where the words actually get delivered; the
-   * manual entry only arms it.
+   * turn reaches Arena, so the words get delivered by a turn, and the manual
+   * entry (ticket 14) only arms it.
+   *
+   * Read-then-commit rather than take-and-write, because "the turn goes out" is
+   * not known yet: appendAgentMessage can still fail (page or context torn
+   * down, navigation failed, no Send button). A turn that never reaches Arena
+   * has told the model nothing, so consuming here would drop the injection
+   * silently — the "the UI said armed and then nothing happened" failure ticket
+   * 14 set out to remove. The two halves are also both inside the serialized
+   * section (see converse) so that two turns racing on one Session cannot both
+   * read "not injected yet" and carry the preamble twice.
    */
   localCapabilityForTurn(sessionId, headers = null) {
     const endpoint = this.#currentEndpoint();
@@ -229,20 +241,46 @@ export class Bridge {
       windowMs: this.config.codexRecentWindowMs,
       fallback: this.config.mcpWorkspace,
     });
-    const preamble = mcpPreamble({ url: endpoint.url, token: endpoint.token, workspace });
-    this.mcpInjected.set(sessionId, endpoint.fingerprint);
-    this.#saveMcpInjected();
-    if (pending) this.mcpReinjectPending.delete(sessionId);
-    log.info("bridge", pending ? "local capability re-injected (armed by request)" : "converse: injecting local MCP endpoint into session", {
+    return {
+      injected: true,
+      pending,
+      reason: plan.reason,
+      workspace,
+      workspaceFrom: source,
+      preamble: mcpPreamble({ url: endpoint.url, token: endpoint.token, workspace }),
+      // What committing needs, captured NOW: by the time the prompt is out the
+      // endpoint file may already describe a different tunnel, and the ledger
+      // has to record what this turn actually said.
       sessionId,
+      fingerprint: endpoint.fingerprint,
+      endpointUrl: endpoint.url,
+    };
+  }
+
+  /**
+   * Spend what localCapabilityForTurn() decided — called once the prompt has
+   * really been handed to Arena, so this Session has really been told.
+   *
+   * Idempotent: a turn can reach the send twice (converse retries once when the
+   * page died mid-run), and the second commit must not undo the first.
+   */
+  commitLocalCapability(decision) {
+    if (!decision?.injected) return;
+    this.mcpInjected.set(decision.sessionId, decision.fingerprint);
+    this.#saveMcpInjected();
+    if (decision.pending) this.mcpReinjectPending.delete(decision.sessionId);
+    const what = decision.pending
+      ? "local capability re-injected (armed by request)"
+      : "converse: injecting local MCP endpoint into session";
+    log.info("bridge", what, {
+      sessionId: decision.sessionId,
       // Masked like the AgentDock start line: the random subdomain is what makes
       // the tunnel unguessable, so the URL is a credential once the logs travel.
-      url: maskTunnelUrl(endpoint.url),
-      workspace: workspace || null,
-      workspaceFrom: source,
-      reason: plan.reason,
+      url: maskTunnelUrl(decision.endpointUrl),
+      workspace: decision.workspace || null,
+      workspaceFrom: decision.workspaceFrom,
+      reason: decision.reason,
     });
-    return { injected: true, pending, reason: plan.reason, workspace, workspaceFrom: source, preamble };
   }
 
   /**
@@ -399,6 +437,28 @@ export class Bridge {
     return this.browser.getPage(account || this.#credential(), purpose);
   }
 
+  /**
+   * Put a page on the session, and say whether that meant navigating.
+   *
+   * §4.29 — navigating to /agent/<id> costs 18–48s (SPA hydration) and adds
+   * Cloudflare exposure (§4.24), so a caller that is already where it needs to
+   * be must not pay for another one. Two callers: appendAgentMessage, which
+   * needs the composer, and a retry that only needs the ORIGIN — the reads are
+   * relative fetches, and a page that replaced a torn-down one starts on
+   * about:blank.
+   */
+  async #landOnSession(page, sessionId) {
+    const target = `https://arena.ai/agent/${sessionId}`;
+    let current = "";
+    try {
+      current = page.url() || "";
+    } catch {
+      /* a page that is closing has no url to give */
+    }
+    if (current.startsWith(target)) return false;
+    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    return true;
+  }
 
   async createAgentSession(page, prompt) {
     await page.goto("https://arena.ai/agent", { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -435,27 +495,14 @@ export class Bridge {
   }
 
   async appendAgentMessage(page, state, prompt) {
-    // §4.29 — page reuse. Navigating to /agent/<id> costs 18–48s per call
-    // (SPA hydration) and adds Cloudflare exposure (see §4.24). When the target
-    // session is ALREADY the page we are on, skip the navigation entirely and
-    // only re-check that the composer is actually there.
-    const targetUrl = `https://arena.ai/agent/${state.id}`;
-    const currentUrl = (() => {
-      try {
-        return page.url() || "";
-      } catch {
-        return "";
-      }
-    })();
-    const reusePage = currentUrl.startsWith(targetUrl);
+    // §4.29 — page reuse: when the target session is ALREADY the page we are on,
+    // skip the navigation entirely and only re-check that the composer is there
+    // (see #landOnSession for what the navigation costs).
+    const navigated = await this.#landOnSession(page, state.id);
+    const reusePage = !navigated;
     if (reusePage) {
       log.info("bridge", "appendAgentMessage: reusing open session page (no navigation)", {
         sessionId: state.id,
-      });
-    } else {
-      await page.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
       });
     }
     // The arena SPA can take well over 20s to become interactive (slow /
@@ -1311,31 +1358,39 @@ export class Bridge {
     const full = this.#queueFull();
     if (full) throw full;
 
-    // Past this point the request is a real turn: nothing above can answer it
-    // any more, so this is where everything a turn SPENDS is taken. A request
-    // answered from inflight or from the idempotency cache never reaches the
-    // model, and spending there would burn it on a turn Arena never sees — the
-    // manual re-injection (ticket 14) would report "armed" and then vanish.
-    //
-    // Internal probes (体检) pass injectMcp:false and take nothing at all:
-    // injection is one-shot, so a health check would spend it and the real
-    // conversation would never be told about the workspace.
-    const mcpLine =
-      options.injectMcp === false
-        ? ""
-        : this.localCapabilityForTurn(sessionId, options.headers || null).preamble;
-
-    // §4.36 — explicit end-of-turn marker (random per request). When the agent
-    // echoes it we KNOW the turn is over, instead of inferring it from finish
-    // events or quiet gaps. A fresh nonce can never appear in replayed history,
-    // so it also tells us which turn is ours.
-    const marker = this.config.turnMarkerEnabled
-      ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
-      : "";
-    prompt = decorate({ preamble: mcpLine, marker });
-    if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
-
     const work = this.#serialized(() => this.browser.withAccount(account, async () => {
+      // Everything a turn SPENDS is decided here, INSIDE the serialized section,
+      // and taken only once the prompt is actually Arena's (see the commit below
+      // runOnce's send). Two separate reasons, both about not losing a one-shot:
+      //
+      //  - Not before the queue: the decision READ-then-commit pair writes the
+      //    per-Session ledger, and a pair split across the queue would let two
+      //    turns racing on one Session both read "not injected yet" and carry
+      //    the preamble twice.
+      //  - Not at admission: "admitted" is still not "sent". A request answered
+      //    from inflight or from the idempotency cache never gets here at all,
+      //    and a turn whose send fails has told the model nothing — spending
+      //    either would burn the injection, and the manual re-injection
+      //    (ticket 14) would report "armed" and then vanish.
+      //
+      // Internal probes (体检) pass injectMcp:false and take nothing at all:
+      // injection is one-shot, so a health check would spend it and the real
+      // conversation would never be told about the workspace.
+      const injection =
+        options.injectMcp === false
+          ? { injected: false }
+          : this.localCapabilityForTurn(sessionId, options.headers || null);
+
+      // §4.36 — explicit end-of-turn marker (random per request). When the agent
+      // echoes it we KNOW the turn is over, instead of inferring it from finish
+      // events or quiet gaps. A fresh nonce can never appear in replayed history,
+      // so it also tells us which turn is ours.
+      const marker = this.config.turnMarkerEnabled
+        ? `DONE-${crypto.randomBytes(4).toString("hex").toUpperCase()}`
+        : "";
+      prompt = decorate({ preamble: injection.preamble || "", marker });
+      if (marker) log.info("bridge", "converse: end-of-turn marker attached", { sessionId, marker });
+
       // Fresh per-request dedupe ledger for the streaming channel (§4.33).
       this._emittedByNode = new Map();
       // Count what actually went out, so we can tell "no delta came from Arena"
@@ -1378,8 +1433,29 @@ export class Bridge {
       // One full attempt: navigate to the session, dismiss the "继续工作" review
       // modal if present, fill the composer the Arena模型助手 way, click the real
       // Send button (§4.11), then read ONLY the most-recent turn (§4.12.3).
+      //
+      // `delivered` is what separates the two halves for the retry below, and it
+      // asserts exactly one thing: appendAgentMessage RETURNED. What that covers
+      // is the teardown-after-send case — the prompt reached Arena, and the page
+      // died while we were reading the answer — where running the whole attempt
+      // again would put the user's message, and the one-shot MCP preamble
+      // decorate folded into it, in front of the model twice. So a retry after a
+      // delivered prompt re-reads instead. The read needs nothing the send
+      // produced (it reconnects /out and tells our turn from the replayed
+      // history by the replay gap, §4.31), but it does need the page to be on the
+      // session: its fetches are relative.
+      //
+      // What it does NOT cover, so that nobody reads this as exactly-once: a send
+      // whose outcome is unknown — the request left the process, the reply never
+      // came back, so appendAgentMessage threw with the message possibly already
+      // in the session. That case still retries, and can still deliver twice.
+      // Closing it needs something on Arena's side (an idempotency key, or a way
+      // to ask whether the session already holds the message), which this project
+      // does not have.
+      let delivered = false;
       const runOnce = async () => {
         const page = await this.#page(account, purpose);
+        if (delivered) await this.#landOnSession(page, sessionId);
         // Acquire the session public-access-token up front (re-used below).
         let token = "";
         try {
@@ -1399,7 +1475,19 @@ export class Bridge {
           marker,
         };
         sessionState = state;
-        await this.appendAgentMessage(page, state, prompt);
+        if (!delivered) {
+          await this.appendAgentMessage(page, state, prompt);
+          // The prompt is Arena's now, so this Session really has been told —
+          // this is the moment the one-shot preamble and the pending manual
+          // re-injection are finally spent (ticket 21). A read failure past this
+          // point must NOT give them back: Arena has already seen the text, and
+          // re-injecting would duplicate it.
+          //
+          // Marked before the commit, not after: the commit writes to disk, and
+          // a failed ledger write is still not a reason to send the turn twice.
+          delivered = true;
+          this.commitLocalCapability(injection);
+        }
         return this.readLatestTurn(page, state, upstreamSink);
       };
       let parsed;
@@ -1422,6 +1510,10 @@ export class Bridge {
           log.warn("bridge", "converse: browser/page closed mid-run; recreating and retrying once", {
             sessionId,
             message: msg,
+            // false means the retry re-reads the session instead of sending the
+            // prompt again: that is what stops one teardown from delivering the
+            // message (and its preamble) twice.
+            willResend: !delivered,
           });
           let browserAlive = false;
           try {

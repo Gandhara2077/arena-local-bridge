@@ -67,8 +67,20 @@ function makeBridge(overrides = {}) {
 }
 
 /** One real turn through converse(), on the double above. */
-function turn(bridge, text, headers) {
-  return bridge.converse(SESSION, { messages: [{ role: "user", content: text }] }, { headers, account: ACCOUNT });
+function turn(bridge, text, headers, extra = {}) {
+  return bridge.converse(SESSION, { messages: [{ role: "user", content: text }] }, { headers, account: ACCOUNT, ...extra });
+}
+
+/**
+ * Ticket 21 — decide and spend in one step: the two calls converse() makes
+ * around a send that succeeded. For tests whose subject is the bookkeeping
+ * (which fingerprint was recorded, whether the arming is still pending) rather
+ * than the moment of spending, which has its own describe block below.
+ */
+function takeInjection(bridge, headers) {
+  const decision = bridge.localCapabilityForTurn(SESSION, headers);
+  bridge.commitLocalCapability(decision);
+  return decision;
 }
 
 const writeEndpoint = (bridge, url, token) =>
@@ -87,11 +99,15 @@ describe("manual re-injection", () => {
     writeEndpoint(bridge, URL_A, "token-a");
     const headers = { [WORKSPACE_HEADER]: "/Users/me/project" };
 
-    // The automatic first turn.
+    // Ticket 21 — deciding is not spending. converse() decides when the turn is
+    // admitted and spends once the prompt is Arena's; one turn is those two
+    // calls around the send.
     const first = bridge.localCapabilityForTurn(SESSION, headers);
     assert.equal(first.injected, true);
     assert.match(first.preamble, /endpoint: https:\/\/tunnel-a/);
     assert.match(first.preamble, /本地工作区: \/Users\/me\/project/);
+    assert.equal(bridge.mcpInjected.has(SESSION), false, "a decision alone has told Arena nothing");
+    bridge.commitLocalCapability(first);
     assert.equal(
       injectionPlan({
         injected: bridge.mcpInjected.get(SESSION),
@@ -113,6 +129,7 @@ describe("manual re-injection", () => {
     assert.equal(next.injected, true, "the armed turn must carry the preamble again");
     assert.equal(next.pending, true);
     assert.match(next.preamble, /本地工作区: \/Users\/me\/project/);
+    bridge.commitLocalCapability(next);
 
     // The arming is one-shot: the turn after it is back to the normal rule.
     assert.equal(bridge.localCapabilityForTurn(SESSION, headers).injected, false);
@@ -121,7 +138,7 @@ describe("manual re-injection", () => {
   test("the workspace is resolved again at the armed turn, not replayed from before", () => {
     const bridge = makeBridge();
     writeEndpoint(bridge, URL_A, "token-a");
-    bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/Users/me/old-project" });
+    takeInjection(bridge, { [WORKSPACE_HEADER]: "/Users/me/old-project" });
     bridge.reinjectLocalCapability(SESSION, { [WORKSPACE_HEADER]: "/Users/me/new-project" });
     const moved = bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/Users/me/new-project" });
     assert.equal(moved.workspace, "/Users/me/new-project");
@@ -140,7 +157,7 @@ describe("manual re-injection", () => {
     // caller supplies a workspace (header or config), the normal path works.
     assert.equal(bridge.mcpReinjectPending.has(SESSION), false);
     assert.equal(bridge.mcpInjected.has(SESSION), false);
-    assert.equal(bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/w" }).injected, true);
+    assert.equal(takeInjection(bridge, { [WORKSPACE_HEADER]: "/w" }).injected, true);
   });
 
   test("a configured default workspace satisfies it without any header", () => {
@@ -155,9 +172,9 @@ describe("manual re-injection", () => {
   test("a new tunnel re-injects on its own (old line is dead)", () => {
     const bridge = makeBridge();
     writeEndpoint(bridge, URL_A, "token-a");
-    assert.equal(bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/w" }).injected, true);
+    assert.equal(takeInjection(bridge, { [WORKSPACE_HEADER]: "/w" }).injected, true);
     writeEndpoint(bridge, URL_B, "token-b");
-    assert.equal(bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/w" }).injected, true);
+    assert.equal(takeInjection(bridge, { [WORKSPACE_HEADER]: "/w" }).injected, true);
   });
 
   // The point of the arming: it is SPENT by a turn, so it may only be spent by
@@ -290,8 +307,178 @@ describe("manual re-injection", () => {
     // Same URL, same first 8 characters: a prefix fingerprint would call these
     // identical and skip the re-injection the new token needs.
     writeEndpoint(bridge, URL_A, "abcdefgh-OLD");
-    assert.equal(bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/w" }).injected, true);
+    assert.equal(takeInjection(bridge, { [WORKSPACE_HEADER]: "/w" }).injected, true);
     writeEndpoint(bridge, URL_A, "abcdefgh-NEW");
-    assert.equal(bridge.localCapabilityForTurn(SESSION, { [WORKSPACE_HEADER]: "/w" }).injected, true);
+    assert.equal(takeInjection(bridge, { [WORKSPACE_HEADER]: "/w" }).injected, true);
+  });
+});
+
+// Ticket 21 — WHEN the injection is spent. It is decided when the turn is
+// admitted and spent once the prompt is Arena's, so the two ways a turn can die
+// land on opposite sides of that line: before the send nothing is spent (the
+// model was never told), after the send nothing comes back (the model has seen
+// it, and repeating it would duplicate).
+describe("when a turn spends the injection", () => {
+  const readTurn = () => ({ text: "ok", nativeCalls: [], turns: [], timing: { breakReason: "turn+marker" } });
+  const headers = () => ({ [WORKSPACE_HEADER]: "/Users/me/project" });
+
+  test("a turn that dies before Arena gets the prompt keeps it, and the next one still carries it", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    bridge.appendAgentMessage = async () => {
+      throw new Error("Send button not found");
+    };
+
+    await assert.rejects(turn(bridge, "hello", headers()));
+    assert.equal(bridge.sent.length, 0, "the prompt never left");
+    assert.equal(bridge.mcpInjected.has(SESSION), false, "…so nothing was spent");
+
+    bridge.appendAgentMessage = async (_page, _state, prompt) => {
+      bridge.sent.push(prompt);
+    };
+    await turn(bridge, "hello again", headers());
+    assert.equal(bridge.sent.length, 1);
+    assert.match(bridge.sent[0], /endpoint: https:\/\/tunnel-a/, "the preamble is still there for the turn that goes out");
+    assert.equal(bridge.mcpInjected.has(SESSION), true);
+  });
+
+  test("an armed re-injection survives a turn that dies before Arena gets the prompt", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    await turn(bridge, "hello", headers());
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false, "the automatic injection already came and went");
+
+    assert.equal(bridge.reinjectLocalCapability(SESSION, headers()).pending, true);
+    bridge.appendAgentMessage = async () => {
+      throw new Error("composer never became ready");
+    };
+    await assert.rejects(turn(bridge, "second", headers()));
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), true, "the arming is still there to be delivered");
+
+    bridge.appendAgentMessage = async (_page, _state, prompt) => {
+      bridge.sent.push(prompt);
+    };
+    await turn(bridge, "second", headers());
+    assert.equal(bridge.sent.length, 2);
+    assert.match(bridge.sent[1], /endpoint: https:\/\/tunnel-a/);
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false, "spent by the turn that really went out");
+  });
+
+  test("a turn that dies after Arena got the prompt keeps it spent, so it is never delivered twice", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    bridge.readLatestTurn = async () => {
+      throw new Error("stream broke");
+    };
+
+    await assert.rejects(turn(bridge, "hello", headers()));
+    assert.equal(bridge.sent.length, 1, "the prompt did go out");
+    assert.match(bridge.sent[0], /endpoint: https:\/\/tunnel-a/);
+
+    bridge.readLatestTurn = async () => readTurn();
+    await turn(bridge, "hello again", headers());
+    assert.equal(bridge.sent.length, 2);
+    assert.ok(
+      !bridge.sent[1].includes("endpoint: https://tunnel-a"),
+      "Arena already has the preamble; sending it again would duplicate it",
+    );
+  });
+
+  test("an internal probe (injectMcp:false) takes nothing", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+
+    await turn(bridge, "体检", headers(), { injectMcp: false });
+    assert.equal(bridge.mcpInjected.has(SESSION), false, "a health check must not spend the one-shot");
+    assert.ok(!bridge.sent[0].includes("endpoint:"));
+
+    await turn(bridge, "hello", headers());
+    assert.match(bridge.sent[1], /endpoint: https:\/\/tunnel-a/, "…so the real conversation is still told");
+    assert.equal(bridge.mcpInjected.has(SESSION), true);
+  });
+
+  test("two turns racing on one Session carry the preamble once, not twice", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+
+    await Promise.all([turn(bridge, "one", headers()), turn(bridge, "two", headers())]);
+    assert.equal(bridge.sent.length, 2, "both turns did run");
+    assert.equal(
+      bridge.sent.filter((p) => p.includes("endpoint: https://tunnel-a")).length,
+      1,
+      "decide and spend are both inside the queue, so the second turn reads the first one's ledger",
+    );
+  });
+
+  // The test above dies in the READ, which is the side that must not un-spend the
+  // injection. But a read failure that looks like a torn-down page is also the
+  // trigger for converse's ONE retry — and that retry used to run the whole
+  // attempt again, send included. Arena then had the same message, preamble and
+  // all, twice. The error has to be the one the retry actually matches; a plain
+  // "stream broke" never reaches this path.
+  test("the retry after a page teardown re-reads the session instead of re-sending", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    const page = {
+      landed: "",
+      url: () => page.landed,
+      goto: async (url) => {
+        page.landed = url;
+      },
+    };
+    // Only the PAGE died: the browser is still connected, which is why converse
+    // keeps it (and why these tests never need a close()).
+    bridge.browser = {
+      withAccount: async (_account, fn) => fn(),
+      getPage: async () => page,
+      browser: { isConnected: () => true },
+    };
+
+    let reads = 0;
+    bridge.readLatestTurn = async () => {
+      reads += 1;
+      if (reads === 1) throw new Error("Target page, context or browser has been closed");
+      return readTurn();
+    };
+
+    const answer = await turn(bridge, "hello", headers());
+    assert.equal(answer.choices[0].message.content, "ok", "the retried read is what answers the turn");
+    assert.equal(reads, 2, "the first read died, the retry read again");
+    assert.equal(bridge.sent.length, 1, "one send however many reads: the prompt was already Arena's");
+    assert.match(bridge.sent[0], /endpoint: https:\/\/tunnel-a/);
+    assert.equal(
+      bridge.sent.filter((p) => p.includes("endpoint: https://tunnel-a")).length,
+      1,
+      "a second send would have delivered the one-shot preamble twice",
+    );
+    assert.equal(page.landed, `https://arena.ai/agent/${SESSION}`, "the retry needs the origin: its fetches are relative");
+  });
+
+  test("the retry does not navigate again when the page is already on the session", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    const navigations = [];
+    const page = {
+      url: () => `https://arena.ai/agent/${SESSION}`,
+      goto: async (url) => {
+        navigations.push(url);
+      },
+    };
+    bridge.browser = {
+      withAccount: async (_account, fn) => fn(),
+      getPage: async () => page,
+      browser: { isConnected: () => true },
+    };
+
+    let reads = 0;
+    bridge.readLatestTurn = async () => {
+      reads += 1;
+      if (reads === 1) throw new Error("Execution context was destroyed");
+      return readTurn();
+    };
+
+    await turn(bridge, "hello", headers());
+    assert.equal(bridge.sent.length, 1);
+    assert.deepEqual(navigations, [], "a page already on the session must not pay the 18-48s navigation again");
   });
 });

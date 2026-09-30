@@ -243,7 +243,7 @@ Header 只接受**绝对路径**（盘符路径、UNC 或 POSIX 路径）。相�
 因为相对路径永远不会落到工作区——AgentDock 会将其解析到 `~/AgentDock`，我们自建的 MCP 服务器
 则直接拒绝。
 
-Header 会在注入 preamble 的那个 turn 中读取，因此客户端如果每次请求都发送它，不需要额外处理。内部探针（体检）**不会**消耗一次性的 preamble。
+Header 会在注入 preamble 的那个 turn 中读取，因此客户端如果每次请求都发送它，不需要额外处理。内部探针（体检）**不会**消耗一次性的 preamble；在消息真正交给 Arena 之前就失败的 turn 同样不会 —— 只有发出去了才算送达，所以一次失败的 turn 不会让你白点一次重注入。
 
 Preamble **每个 Session 只发送一次**，并且只在 Tunnel 正常运行时发送；它被刻意保持简短，因为过长的首条消息会提高 Arena 触发 reCAPTCHA 的风险。
 
