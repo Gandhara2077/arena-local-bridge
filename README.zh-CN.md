@@ -154,9 +154,6 @@ npm test
 
 ![Repository Traffic](./assets/traffic.svg)
 
-> 流量数据由 GitHub Actions 自动从仓库 Traffic API 采集。每日历史数据保存在 `assets/traffic-history.json`；GitHub API 每次只提供最近 14 天，因此历史曲线会从首次采集开始持续累积。
->
-> Workflow 使用名为 `TRAFFIC_TOKEN` 的仓库 Secret，权限仅需本仓库 **Administration: read**。该 Token 只用于读取 Traffic；历史数据和 SVG 由 workflow 自带的 `GITHUB_TOKEN` 提交。
 
 ## 许可证
 
