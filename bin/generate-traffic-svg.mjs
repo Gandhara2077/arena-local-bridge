@@ -77,6 +77,7 @@ function chartPanel({ title, subtitle, values, x, y, width, height, showScale = 
 const history = JSON.parse(await fs.readFile(HISTORY_PATH, "utf8"));
 const days = [...(history.days ?? [])].sort((a, b) => a.date.localeCompare(b.date));
 const points = bucket(days);
+const periodLabel = days.length > 365 ? "4-week totals" : days.length > 60 ? "Weekly totals" : "Daily";
 const labels = points.length === 0 ? [] : [...new Set([
   points[0]?.date,
   points[Math.floor((points.length - 1) / 2)]?.date,
@@ -115,7 +116,7 @@ let body = "";
 if (points.length) {
   body += chartPanel({
     title: "Views",
-    subtitle: "Daily page views",
+    subtitle: periodLabel === "Daily" ? "Daily page views" : periodLabel + " page views",
     values: points.map((p) => p.views),
     x: chartX,
     y: panel1Y,
@@ -124,7 +125,7 @@ if (points.length) {
   });
   body += chartPanel({
     title: "Clones",
-    subtitle: "Daily repository clones",
+    subtitle: periodLabel === "Daily" ? "Daily repository clones" : periodLabel + " repository clones",
     values: points.map((p) => p.clones),
     x: chartX,
     y: panel2Y,
