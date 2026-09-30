@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { writeSecretFile, icaclsRestrictArgs, restrictSecretFile, currentAccount } from "../src/secret.mjs";
+import { writeSecretFile, icaclsFreshFileCommands, restrictSecretFile, currentAccount } from "../src/secret.mjs";
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -104,24 +104,53 @@ test("parseIcalsAces: an inherited ACL shows up as other people having access", 
   assert.ok(aces.some((a) => a.identity === "NT AUTHORITY\\Authenticated Users"));
 });
 
-// One call is enough for a file this module created — and only for such a file.
-// It covers everything Windows puts on one by itself: what the directory hands
-// down, and the two principals that arrive as EXPLICIT entries whenever the
-// directory hands down nothing (the CI runner's temp dir).
-test("icaclsRestrictArgs: drops inheritance, drops the OS principals, grants only the given account", () => {
-  assert.deepEqual(icaclsRestrictArgs("D:/data/auth-token.txt", "PC-HOST\\me"), [
-    "D:/data/auth-token.txt",
-    "/inheritance:r",
-    // By SID, not by name: the display names are translated on a localized
-    // Windows. SYSTEM and Administrators arrive as EXPLICIT entries whenever the
-    // parent directory hands down nothing to inherit (the CI runner's temp dir),
-    // and /inheritance:r cannot remove those.
-    "/remove:g",
-    "*S-1-5-18",
-    "*S-1-5-32-544",
-    "/grant:r",
-    "PC-HOST\\me:(F)",
+// Nothing here enumerates a principal, which is the whole design: what a new
+// file carries is whatever Windows decided to give it, and this module is not in
+// a position to name that — so it clears it instead.
+test("icaclsFreshFileCommands: reset what Windows put there, cut inheritance, leave only the given account", () => {
+  assert.deepEqual(icaclsFreshFileCommands("D:/data/auth-token.txt", "PC-HOST\\me"), [
+    // First, and non-destructively: the only step that can fail on a name it
+    // cannot resolve, so a bad account costs the file nothing.
+    ["D:/data/auth-token.txt", "/grant:r", "PC-HOST\\me:(F)"],
+    // Then drop every explicit entry — the one added above included, and every
+    // one this module never saw. No `/remove:g` list can stand in for this.
+    ["D:/data/auth-token.txt", "/reset"],
+    // And finally cut inheritance, leaving full control with this account alone.
+    ["D:/data/auth-token.txt", "/inheritance:r", "/grant:r", "PC-HOST\\me:(F)"],
   ]);
+});
+
+// The case the sequence exists for, and the one a single command built on
+// `/remove:g` cannot pass: a NEW file whose explicit entries are not the two OS
+// principals. That is not exotic — a new file's explicit ACL is whatever Windows
+// gave it, and when the parent directory hands nothing down that is the process
+// token's DEFAULT DACL, whose algorithm is implementation-defined. A third
+// account is one of the things it may contain, so assuming it does not is an
+// assumption this module cannot afford. Planted below the way a hand-run
+// `icacls /grant` would leave one.
+test("icaclsFreshFileCommands: a file that already carries a third account ends up with only this one", {
+  skip: process.platform !== "win32" && "Windows 之外的平台没有 ACL 这一层，见上面那条",
+}, () => {
+  const file = path.join(tempDir("arena-secret-"), "fresh.txt");
+  fs.writeFileSync(file, "");
+  execFileSync("icacls", [file, "/grant", "*S-1-5-11:(R)"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  assert.equal(
+    parseIcalsAces(readAcl(file), file).length > 1,
+    true,
+    "the sample must start out carrying more than owner-only"
+  );
+
+  for (const args of icaclsFreshFileCommands(file, currentAccount())) {
+    execFileSync("icacls", args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  }
+
+  const aces = parseIcalsAces(readAcl(file), file);
+  assert.equal(aces.length, 1, `expected one entry, got ${JSON.stringify(aces)}`);
+  assert.match(aces[0].identity, new RegExp(`(^|\\\\)${os.userInfo().username}$`, "i"));
+  assert.equal(aces[0].rights, "(F)");
 });
 
 // The case three accounts try to hide behind: an entry this module never wrote

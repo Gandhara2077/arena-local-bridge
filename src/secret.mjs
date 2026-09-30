@@ -61,7 +61,27 @@ export function writeSecretFile(file, data) {
         /* already gone */
       }
     }
-    fs.rmSync(tmp, { force: true });
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // An icacls step that stopped right after `/reset` leaves the staged file
+      // with no access for anyone — measured: the owner cannot even read it — so
+      // whether it can be deleted comes down to the parent directory's ACL and
+      // to what the platform's delete path does with an unreadable file. Give
+      // this account its access back and retry. Every step here is best effort:
+      // the file is empty, and the error the caller needs is the one that
+      // stopped the write, not a cleanup failure.
+      try {
+        protectFreshFile(tmp);
+      } catch {
+        /* nothing left to try */
+      }
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        /* nothing left to try */
+      }
+    }
     throw error;
   }
 }
@@ -73,30 +93,37 @@ export function writeSecretFile(file, data) {
 // inherits `Authenticated Users:(M)`). icacls is the platform's mechanism, and
 // the one a Windows administrator would look for anyway.
 //
-// Pure, so the rule is assertable without a disk: drop the inherited entries,
-// drop the OS's own full-control principals, then grant full control to this
-// account and nobody else.
+// Pure, so the rule is assertable without a disk. Three invocations, in order,
+// and the first two exist because of what a brand-new file can be carrying:
 //
-// The middle step is not redundant. `/inheritance:r` only removes entries the
-// file INHERITED — and Windows does not always give a new file any: when the
-// parent directory holds no inheritable ACE, CreateFile falls back to the
-// process token's default DACL, which is owner + Administrators + SYSTEM as
-// three EXPLICIT entries that `/inheritance:r` cannot touch. That is not a
-// hypothetical: the GitHub runner's temp directory is such a parent, so the
-// previous arguments produced a three-entry ACL in exactly the environment this
-// project's CI runs in, while a developer machine (whose temp directory does
-// hand ACEs down) came out at one. Naming the two by SID rather than by name
-// keeps it working on a localized Windows, where the display names are
-// translated.
-export function icaclsRestrictArgs(file, account) {
+//   1. `/grant:r` this account, while the file still holds the ACL it was born
+//      with. This is the only step that fails for a reason we did not cause (a
+//      name icacls cannot resolve), and it changes nothing anybody else can
+//      see, so failing here costs the file nothing.
+//   2. `/reset` throws away every EXPLICIT entry and re-applies what the parent
+//      inherits. This is the step that cannot be replaced by `/remove:g`: a new
+//      file's explicit entries are whatever Windows gave it, and that is not a
+//      fixed list. When the parent directory hands nothing down, CreateFile
+//      falls back to the process token's DEFAULT DACL — owner, Administrators
+//      and SYSTEM on the machines measured here, but the algorithm that builds
+//      it is implementation-defined (MS-DTYP, "Algorithm for Creating a Security
+//      Descriptor"), so this module cannot name it and must not assume it. It
+//      takes our own entry from step 1 with it, hence the grant again below.
+//      It does not touch the OWNER — that is `/setowner` — so one grant after it
+//      is enough.
+//   3. `/inheritance:r` drops what the parent hands down, and `/grant:r` leaves
+//      full control with this account and nobody else.
+//
+// Why three calls and not one: icacls refuses to combine `/reset` with
+// `/inheritance` or `/grant` on a single command line, and it validates the
+// whole command line BEFORE acting, so it is a syntax refusal rather than an
+// ordering surprise. Measured on this machine: exit 87
+// (ERROR_INVALID_PARAMETER), with the file's ACL untouched.
+export function icaclsFreshFileCommands(file, account) {
   return [
-    file,
-    "/inheritance:r",
-    "/remove:g",
-    "*S-1-5-18", // NT AUTHORITY\SYSTEM
-    "*S-1-5-32-544", // BUILTIN\Administrators
-    "/grant:r",
-    `${account}:(F)`,
+    [file, "/grant:r", `${account}:(F)`],
+    [file, "/reset"],
+    [file, "/inheritance:r", "/grant:r", `${account}:(F)`],
   ];
 }
 
@@ -108,13 +135,13 @@ export function currentAccount() {
   return domain && !name.includes("\\") ? `${domain}\\${name}` : name;
 }
 
-// Owner-only for a file this module has just created, in ONE icacls call.
-// writeSecretFile is the only caller, and that is the point: a file we made
-// ourselves carries nothing but what Windows itself put there, which is exactly
-// what icaclsRestrictArgs takes away (the two OS principals, and whatever the
-// directory inherits). A file that arrived from somewhere else can carry
-// entries none of that covers, so it does not come through here — see
-// restrictSecretFile below, which cannot make that call with this one.
+// Owner-only for a file this module has just created, or say that you could
+// not. writeSecretFile is the only caller, and being the only caller is what
+// makes the several icacls calls of icaclsFreshFileCommands safe here: the file
+// is empty when this runs (the secret is written after it returns) and it was
+// created a moment ago, so a failure anywhere in the sequence costs nothing but
+// discarding it. That is exactly what restrictSecretFile cannot do — a file that
+// already holds a secret has no safe intermediate state to stop in.
 function protectFreshFile(file) {
   if (process.platform !== "win32") {
     fs.chmodSync(file, 0o600);
@@ -122,7 +149,9 @@ function protectFreshFile(file) {
   }
   const account = currentAccount();
   try {
-    execFileSync("icacls", icaclsRestrictArgs(file, account), { windowsHide: true, stdio: "ignore" });
+    for (const args of icaclsFreshFileCommands(file, account)) {
+      execFileSync("icacls", args, { windowsHide: true, stdio: "ignore" });
+    }
   } catch (error) {
     throw Object.assign(
       new Error(`could not make ${file} owner-only (${account}): ${String(error?.message || error)}`),
@@ -139,22 +168,16 @@ const MAX_SECRET_BYTES = 64 * 1024;
 // Make one file owner-only, or say that you could not.
 //
 // On Windows this REPLACES the file — a fresh, already-protected copy is renamed
-// over it — instead of tightening the ACL where it stands. Two reasons:
-//
-//   - icacls cannot clear an ACL it did not write in one call. An explicit grant
-//     to some third account survives both `/inheritance:r` (which only touches
-//     what the file inherited) and `/grant:r` (which only replaces our own
-//     entry), so removing it takes `/reset` — and `/reset` cannot share a
-//     command line with `/inheritance` or `/grant` (measured: exit 87, the whole
-//     command line is validated before anything runs). So the tightening is
-//     three separate calls, and three calls are not a transaction: one failing
-//     halfway leaves whatever the calls before it produced. After `/reset` that
-//     is the directory's inherited ACL, which can be WIDER than the one the call
-//     found on a file somebody had locked down by hand.
-//   - Building the replacement and renaming it into place is one step that
-//     either happened or did not, and it is the step writeSecretFile already
-//     takes. So the file icacls ever sees is one this module created, and the
-//     module keeps one rule instead of two.
+// over it — instead of tightening the ACL where it stands. The reason is the
+// shape of the job rather than the number of icacls calls: an icacls sequence
+// has no safe state to be interrupted in, and this file is not empty. Measured:
+// a file left right after `/reset` is one its own owner cannot even read. On a
+// staged, still-empty file that is harmless (see protectFreshFile); on a file
+// that already holds a secret it would be a window in which the secret is either
+// exposed or beyond repair. Building the replacement and renaming it into place
+// is one step that either happened or did not, and it is the step writeSecretFile
+// already takes — so the file icacls ever sees is one this module created itself,
+// and the module keeps one rule instead of two.
 //
 // What it costs: the file's identity changes (inode, creation time, hard links)
 // and the old copy must not be read-only, because a read-only target fails the
