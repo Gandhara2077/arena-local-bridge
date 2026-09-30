@@ -74,9 +74,30 @@ export function writeSecretFile(file, data) {
 // the one a Windows administrator would look for anyway.
 //
 // Pure, so the rule is assertable without a disk: drop the inherited entries,
-// then grant full control to this account and nobody else.
+// drop the OS's own full-control principals, then grant full control to this
+// account and nobody else.
+//
+// The middle step is not redundant. `/inheritance:r` only removes entries the
+// file INHERITED — and Windows does not always give a new file any: when the
+// parent directory holds no inheritable ACE, CreateFile falls back to the
+// process token's default DACL, which is owner + Administrators + SYSTEM as
+// three EXPLICIT entries that `/inheritance:r` cannot touch. That is not a
+// hypothetical: the GitHub runner's temp directory is such a parent, so the
+// previous arguments produced a three-entry ACL in exactly the environment this
+// project's CI runs in, while a developer machine (whose temp directory does
+// hand ACEs down) came out at one. Naming the two by SID rather than by name
+// keeps it working on a localized Windows, where the display names are
+// translated.
 export function icaclsRestrictArgs(file, account) {
-  return [file, "/inheritance:r", "/grant:r", `${account}:(F)`];
+  return [
+    file,
+    "/inheritance:r",
+    "/remove:g",
+    "*S-1-5-18", // NT AUTHORITY\SYSTEM
+    "*S-1-5-32-544", // BUILTIN\Administrators
+    "/grant:r",
+    `${account}:(F)`,
+  ];
 }
 
 // Fully qualified, so icacls picks the right account on a domain-joined
@@ -87,11 +108,23 @@ export function currentAccount() {
   return domain && !name.includes("\\") ? `${domain}\\${name}` : name;
 }
 
-// Make one file owner-only, or say that you could not. Throwing rather than
-// warning is deliberate: "we failed to protect it" is not something a caller
-// may go on believing succeeded, and only the caller knows whether to abort.
-// Callers that are tightening a file they did NOT create (a copy left by an
-// older version) may catch this and report it — see readOrCreateToken.
+// Make one file owner-only, or say that you could not — with one documented
+// limit. What this removes is the inherited entries plus the OS's own two
+// full-control principals. An EXPLICIT entry naming some third account is NOT
+// removed, and `/inheritance:r` does not touch those either.
+//
+// That limit is invisible for a file we just created (writeSecretFile makes its
+// own, so there is nothing but the owner left — asserted by test/secret.test.mjs)
+// and reachable for a file we did not: readOrCreateToken and the startup .env
+// pass already-existing files here, and those can carry anything. Ticket 23 owns
+// closing that, and its acceptance is a test with a planted explicit ACE for a
+// third account.
+//
+// Throwing rather than warning is deliberate: "we failed to protect it" is not
+// something a caller may go on believing succeeded, and only the caller knows
+// whether to abort. Callers that are tightening a file they did NOT create (a
+// copy left by an older version) may catch this and report it — see
+// readOrCreateToken.
 export function restrictSecretFile(file) {
   if (process.platform !== "win32") {
     fs.chmodSync(file, 0o600);

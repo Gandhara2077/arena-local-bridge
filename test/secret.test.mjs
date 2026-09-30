@@ -94,10 +94,17 @@ test("parseIcalsAces: an inherited ACL shows up as other people having access", 
   assert.ok(aces.some((a) => a.identity === "NT AUTHORITY\\Authenticated Users"));
 });
 
-test("icaclsRestrictArgs: drops inheritance and grants only the given account", () => {
+test("icaclsRestrictArgs: drops inheritance, drops the OS principals, grants only the given account", () => {
   assert.deepEqual(icaclsRestrictArgs("D:/data/auth-token.txt", "PC-HOST\\me"), [
     "D:/data/auth-token.txt",
     "/inheritance:r",
+    // By SID, not by name: the display names are translated on a localized
+    // Windows. SYSTEM and Administrators arrive as EXPLICIT entries whenever the
+    // parent directory hands down nothing to inherit (the CI runner's temp dir),
+    // and /inheritance:r cannot remove those.
+    "/remove:g",
+    "*S-1-5-18",
+    "*S-1-5-32-544",
     "/grant:r",
     "PC-HOST\\me:(F)",
   ]);
@@ -112,6 +119,12 @@ test("currentAccount: names one account, qualified when a domain is known", () =
 // ACL — one entry, ours, full control. Anything else still on the file (SYSTEM,
 // Administrators, Authenticated Users…) came from the directory and means the
 // secret is not owner-only.
+//
+// Scope: the tests below go through writeSecretFile, which creates the file it
+// then tightens. A file that ALREADY existed can carry explicit entries for
+// arbitrary accounts, and icaclsRestrictArgs does not remove those — see
+// restrictSecretFile's comment; ticket 23 owns closing that. So these must not be
+// read as "any file that passes through this module ends up owner-only".
 // The secret is either owner-only or absent. A file that the documentation calls
 // private and the filesystem does not is worse than a failed write, so the
 // failure has to reach the caller — and it must leave nothing behind.
