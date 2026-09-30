@@ -41,10 +41,14 @@ const COMPOSER_PROBE = () =>
  * A bare `403 recaptcha validation failed` cannot separate "reCAPTCHA scored the
  * automated browser low" from "the composer never rendered" or "the proxy was not
  * in effect" — and those call for different reactions from whoever runs the smoke.
- * The page probe is best-effort: a dead page must not replace the original error
- * with one about the diagnostics themselves.
+ *
+ * `kind` is a heuristic, not a verdict: reCAPTCHA is the one cause the message
+ * names outright, and everything else lands in "compose". The remaining fields
+ * are what a person reads to tell the two compose causes apart; this reports, it
+ * does not decide. The page probe is best-effort — a dead page must not replace
+ * the original error with one about the diagnostics themselves.
  */
-export async function diagnoseComposeFailure(page, error) {
+export async function diagnoseComposeFailure(page, error, { proxy = "" } = {}) {
   let pageUrl = "";
   let composerEditors = null;
   try {
@@ -59,12 +63,16 @@ export async function diagnoseComposeFailure(page, error) {
   }
   const message = String(error?.message || error || "");
   return {
-    // This is the distinction that decides whether running the smoke again is
-    // even worth trying.
     kind: /recaptcha/i.test(message) ? "recaptcha" : "compose",
     status: Number(error?.status || 0) || null,
     headed: process.env.ARENA_HEADED === "1",
-    proxy: process.env.ARENA_AGENT_PROXY ? "set" : "unset",
+    // The value the BROWSER was actually handed, not what the shell happens to
+    // export: the ordinary way to configure the proxy is DATA_DIR/.env, which
+    // loadConfig folds in but process.env never sees. Reading process.env here
+    // would report "unset" for exactly the setups where the answer matters.
+    // ARENA_HEADED above is different — arena-login.mjs reads it from
+    // process.env itself, so process.env is the truth for that one.
+    proxy: proxy ? "set" : "unset",
     pageUrl,
     composerEditors,
     message,
@@ -83,6 +91,23 @@ export function classifyTurn({ error = null, text = "", expected = EXPECTED } = 
   const body = String(text || "").trim();
   if (!body) return "no-answer";
   return new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(body) ? "ok" : "mismatch";
+}
+
+/**
+ * Create a Session AND consume its first turn before returning.
+ *
+ * `createAgentSession()` resolves as soon as the Session exists; the turn it
+ * started is still running. Every production caller settles it before appending
+ * anything — runAgent and recoverFromDuplicate both call readAgentOutput right
+ * here — because the alternative is an append against a composer that is still
+ * generating. That is a race no real request can produce, so a smoke that skips
+ * it would be exercising a flow that does not exist. Hence one function: the
+ * order IS the invariant, and this is where it is stated.
+ */
+export async function createSessionAndSettle(bridge, page, prompt) {
+  const state = await bridge.createAgentSession(page, prompt);
+  await bridge.readAgentOutput(page, state);
+  return state;
 }
 
 /**
@@ -132,11 +157,13 @@ async function main() {
     if (!sessionId && process.env.SELFTEST_SKIP_CREATE !== "1") {
       const page = await bridge.browser.getPage(account, "converse");
       try {
-        const state = await bridge.createAgentSession(page, `Reply with exactly: ${EXPECTED}`);
+        const state = await createSessionAndSettle(bridge, page, `Reply with exactly: ${EXPECTED}`);
         sessionId = state.id;
         console.log(`SELFTEST create ok session=${state.id}`);
       } catch (error) {
-        console.log(`SELFTEST create failed ${JSON.stringify(await diagnoseComposeFailure(page, error))}`);
+        console.log(
+          `SELFTEST create failed ${JSON.stringify(await diagnoseComposeFailure(page, error, { proxy: config.proxy }))}`
+        );
         throw error;
       }
     }
@@ -155,6 +182,18 @@ async function main() {
     }
     const kind = classifyTurn({ error, text });
     console.log(`SELFTEST converse session=${sessionId} kind=${kind} reply=${JSON.stringify(text.slice(0, 120))}`);
+    if (error) {
+      // `kind` collapses every transport failure into one word, which is the
+      // state this ticket set out to fix. Print what the throw actually said:
+      // 403 and 401 and "session not interactive" want different follow-ups.
+      console.log(
+        `SELFTEST converse error ${JSON.stringify({
+          status: Number(error?.status || 0) || null,
+          code: error?.code || null,
+          message: String(error?.message || error),
+        })}`
+      );
+    }
     if (kind === "ok") {
       console.log("SELFTEST PASS");
       process.exit(0);

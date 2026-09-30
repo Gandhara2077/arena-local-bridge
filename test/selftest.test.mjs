@@ -6,7 +6,7 @@
 // bridge: no browser, no network, no credentials.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { classifyTurn, converseOnce, diagnoseComposeFailure, EXPECTED } from "../bin/selftest.mjs";
+import { classifyTurn, converseOnce, createSessionAndSettle, diagnoseComposeFailure, EXPECTED } from "../bin/selftest.mjs";
 
 /** A page that answers only the two questions the diagnostic asks. */
 function fakePage({ url = "https://arena.ai/agent", composerEditors = 1, dead = false } = {}) {
@@ -80,16 +80,24 @@ describe("diagnoseComposeFailure (ticket 25)", () => {
     assert.equal(diag.composerEditors, null);
   });
 
-  test("headed and proxy are reported, because a headless or proxy-less run changes the odds", async () => {
+  test("the proxy reported is the one the BROWSER got, not whatever the shell exports", async () => {
+    // The ordinary setup keeps the proxy in DATA_DIR/.env, which loadConfig folds
+    // in while process.env never sees it. Reporting process.env would say "unset"
+    // for exactly the setups where the answer matters.
     await withEnv({ ARENA_HEADED: undefined, ARENA_AGENT_PROXY: undefined }, async () => {
       const off = await diagnoseComposeFailure(fakePage(), recaptcha403());
       assert.equal(off.headed, false);
       assert.equal(off.proxy, "unset");
     });
-    await withEnv({ ARENA_HEADED: "1", ARENA_AGENT_PROXY: "http://127.0.0.1:7897" }, async () => {
-      const on = await diagnoseComposeFailure(fakePage(), recaptcha403());
+    await withEnv({ ARENA_HEADED: "1" }, async () => {
+      const on = await diagnoseComposeFailure(fakePage(), recaptcha403(), { proxy: "http://127.0.0.1:7897" });
       assert.equal(on.headed, true);
       assert.equal(on.proxy, "set");
+    });
+    // …and the environment alone must NOT flip it: that was the bug.
+    await withEnv({ ARENA_AGENT_PROXY: "http://127.0.0.1:7897" }, async () => {
+      const envOnly = await diagnoseComposeFailure(fakePage(), recaptcha403());
+      assert.equal(envOnly.proxy, "unset", "process.env is not what the browser was handed");
     });
   });
 });
@@ -115,6 +123,40 @@ describe("classifyTurn (ticket 25)", () => {
   test("the expected token is matched literally, not as a pattern", () => {
     assert.equal(classifyTurn({ text: "BRIDGE_OKX", expected: "BRIDGE_OK" }), "ok");
     assert.equal(classifyTurn({ text: "BRIDGE-OK", expected: "BRIDGE_OK" }), "mismatch");
+  });
+});
+
+describe("createSessionAndSettle (PR #20 review)", () => {
+  test("it consumes the first turn before returning, so the converse round cannot race it", async () => {
+    // createAgentSession() resolves as soon as the Session exists — the turn it
+    // started is still running. Appending the next message then would drive a
+    // composer that is still generating, which no real request ever does: both
+    // production callers (runAgent, recoverFromDuplicate) settle first. This
+    // asserts the order, because the order IS the fix.
+    const order = [];
+    const bridge = {
+      createAgentSession: async () => {
+        order.push("create");
+        return { id: "s-1" };
+      },
+      readAgentOutput: async (page, state) => {
+        order.push(`read:${state.id}`);
+        return "the first turn's text";
+      },
+    };
+    const state = await createSessionAndSettle(bridge, {}, "hello");
+    assert.deepEqual(order, ["create", "read:s-1"], "settling the first turn is the whole point");
+    assert.equal(state.id, "s-1");
+  });
+
+  test("a failure while settling propagates, so the caller can diagnose that step", async () => {
+    const bridge = {
+      createAgentSession: async () => ({ id: "s-1" }),
+      readAgentOutput: async () => {
+        throw Object.assign(new Error("Arena Agent output failed: 403"), { status: 403 });
+      },
+    };
+    await assert.rejects(() => createSessionAndSettle(bridge, {}, "hello"), /403/);
   });
 });
 
