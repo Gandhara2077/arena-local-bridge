@@ -37,9 +37,12 @@ Log in with the user's own credentials:
 node bin/login.mjs --email <email> --password '<password>'
 ~~~
 
-Then start the bridge:
+The bridge refuses to start without a bearer key for its own API, and `login.mjs` does not create one — it only
+provisions `STORAGE_ENCRYPTION_KEY`. Set `ARENA_AGENT_BRIDGE_KEY` (or let `install.sh` generate it and persist it
+in `DATA_DIR/.env`) before starting:
 
 ~~~bash
+export ARENA_AGENT_BRIDGE_KEY="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
 node src/index.mjs
 ~~~
 
@@ -144,7 +147,9 @@ Treat this bridge as a local credential-bearing service.
 
 Arena's blind-battle UI does not reliably expose the underlying model name.
 
-The repository ships its own page probe: source in `src/probe/modules/*.js`, assembled by `bin/build-probe.mjs` into `assets/arena-model-probe.inject.js`. It hooks the network traffic the page already performs, so the model name and the reasoning tier come from the trace the page fetched itself — no run token, no extra request.
+The repository ships its own page probe: source in `src/probe/modules/*.js`, assembled by `bin/build-probe.mjs` into `assets/arena-model-probe.inject.js`.
+
+Arena's response stream carries no model name, but the server hands the page a short-lived `public-access-token` — a JWT with `pub: true` and a `read:runs:<runId>` scope — for each run. The probe picks that token up from traffic the page already performs, then reads the run's own trace back from `api.trigger.dev`: the `ai.streamText.doStream` span carries the model name the worker wrote, and the trace also yields the reasoning tier. There is therefore no model API key to configure anywhere, and the trace reads go to Trigger.dev rather than to Arena — see [SECURITY.md](SECURITY.md).
 
 Treat the result as dependent on Arena's current runtime implementation, not as a stable API contract.
 

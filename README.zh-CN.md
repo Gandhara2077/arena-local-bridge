@@ -54,14 +54,26 @@
 ~~~bash
 git clone https://github.com/Gandhara2077/arena-local-bridge.git
 cd arena-local-bridge
+
+bash install.sh --email you@example.com
+~~~
+
+`install.sh` 会生成所需密钥、用你自己的账号登录并启动 bridge，最后打印它写进 `~/.arena-bridge/.env`
+的 Bearer Key。Windows 上改为双击 `start-gui.bat`。
+
+手动安装：
+
+~~~bash
 npm install
+
+# Bridge 缺少自身 API 的 Bearer Key 时会拒绝启动，而 login.mjs 不会生成它。
+export ARENA_AGENT_BRIDGE_KEY="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
 
 node bin/login.mjs --email you@example.com --password 'your-password'
 node src/index.mjs
 ~~~
 
-然后打开 <http://127.0.0.1:20140> 使用本地运维界面。需要内置 GUI 启动器时，用 `bash install.sh`，
-Windows 上用 `start-gui.bat`。
+两种方式启动后，本地运维界面都在 <http://127.0.0.1:20140>。
 
 ## 使用 API
 
@@ -85,7 +97,8 @@ curl -X POST http://127.0.0.1:20140/v1/chat/completions \
 - **模型池** —— 按识别出的 Model 归组 Session，可按需重新识别。
 - **账号池** —— 多账号按优先级调度、失败自动转移；确实无法服务的账号会被带着原因禁用，
   而不是被当作可用账号继续驱动。
-- **模型识别** —— 模型名与推理档位取自 Arena 页面自己已经在发的流量，不需要 run token，也不产生额外请求。
+- **模型识别** —— 模型名与推理档位来自 Arena 的执行 trace，探针用页面自己获得的 run token 从 Trigger.dev
+  读回。不需要配置任何模型 API Key；这条网络路径见 [SECURITY.md](SECURITY.md)。
 - **本地 MCP** —— 可选。通道启动后，Agent 会被告知工作位置，并能读写你的工作区文件。
   在消息真正交给 Arena 之前失败的 turn 不会消耗一次性前言。
 - **采集与批量测试** —— 批量创建与驱动 Session。

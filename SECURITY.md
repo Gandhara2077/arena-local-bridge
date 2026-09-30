@@ -31,9 +31,9 @@ Until a dedicated security contact is configured, report suspected vulnerabiliti
 
 Normal operation communicates with Arena.ai.
 
-The model-identification fallback can additionally query **trigger.dev** run/trace endpoints, using the public run
-token exposed by the current Arena session. This is an intentional part of the identification mechanism and should
-be considered when evaluating privacy and availability.
+Model identification reads Arena's execution trace back from **trigger.dev** (`api.trigger.dev` run/trace
+endpoints), using the short-lived public run token the Arena page is given for that run. This is an intentional
+part of the identification mechanism and should be considered when evaluating privacy and availability.
 
 Optional proxy/tunnel integrations can introduce additional network destinations; enable them only when you
 understand their trust model.
@@ -44,4 +44,4 @@ understand their trust model.
 - Treat the Arena account password, cookies, encryption key and bridge bearer key as secrets.
 - Do not commit runtime data or .env files.
 - Review optional proxy/tunnel configuration before enabling it.
-- Remember that model-identification fallback traffic can reach trigger.dev.
+- Remember that model identification traffic reaches trigger.dev.

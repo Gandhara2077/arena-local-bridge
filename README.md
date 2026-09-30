@@ -54,14 +54,26 @@ The bridge is for **your own account**. It provides no Arena API key and does no
 ~~~bash
 git clone https://github.com/Gandhara2077/arena-local-bridge.git
 cd arena-local-bridge
+
+bash install.sh --email you@example.com
+~~~
+
+`install.sh` generates the local keys, logs in with your own account and starts the bridge; it prints the bearer
+key it wrote to `~/.arena-bridge/.env`. On Windows, double-click `start-gui.bat` instead.
+
+Doing it by hand:
+
+~~~bash
 npm install
+
+# The bridge refuses to start without a bearer key for its own API, and login.mjs does not create one.
+export ARENA_AGENT_BRIDGE_KEY="$(node -e 'console.log(require("crypto").randomBytes(24).toString("hex"))')"
 
 node bin/login.mjs --email you@example.com --password 'your-password'
 node src/index.mjs
 ~~~
 
-Open <http://127.0.0.1:20140> for the local operations UI. For the bundled GUI launcher use `bash install.sh`,
-or `start-gui.bat` on Windows.
+Either way the local operations UI is at <http://127.0.0.1:20140>.
 
 ## Using the API
 
@@ -85,8 +97,9 @@ A stable `x-codex-session-id` keeps one persistent Arena session per client conv
 - **Model pools** — sessions grouped by identified model, with on-demand re-identification.
 - **Account pool** — several accounts with priority and failover; an account that cannot actually be served is
   disabled with a reason instead of being driven as if it worked.
-- **Model identification** — the model name and reasoning tier come from the page traffic Arena already sends,
-  so no run token and no extra request are needed.
+- **Model identification** — the model name and reasoning tier come from Arena's execution trace, which the
+  probe reads back from Trigger.dev using the run token the page itself is given. There is no model API key to
+  configure; see [SECURITY.md](SECURITY.md) for that network path.
 - **Local MCP** — optional. When the tunnel is up, the agent is told where to work and can read and write files
   in your workspace. A turn that fails before Arena receives the message does not spend the one-shot preamble.
 - **Harvesting and batch testing** — create and drive many sessions at once.
