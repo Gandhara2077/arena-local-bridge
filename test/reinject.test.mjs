@@ -409,4 +409,76 @@ describe("when a turn spends the injection", () => {
       "decide and spend are both inside the queue, so the second turn reads the first one's ledger",
     );
   });
+
+  // The test above dies in the READ, which is the side that must not un-spend the
+  // injection. But a read failure that looks like a torn-down page is also the
+  // trigger for converse's ONE retry — and that retry used to run the whole
+  // attempt again, send included. Arena then had the same message, preamble and
+  // all, twice. The error has to be the one the retry actually matches; a plain
+  // "stream broke" never reaches this path.
+  test("the retry after a page teardown re-reads the session instead of re-sending", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    const page = {
+      landed: "",
+      url: () => page.landed,
+      goto: async (url) => {
+        page.landed = url;
+      },
+    };
+    // Only the PAGE died: the browser is still connected, which is why converse
+    // keeps it (and why these tests never need a close()).
+    bridge.browser = {
+      withAccount: async (_account, fn) => fn(),
+      getPage: async () => page,
+      browser: { isConnected: () => true },
+    };
+
+    let reads = 0;
+    bridge.readLatestTurn = async () => {
+      reads += 1;
+      if (reads === 1) throw new Error("Target page, context or browser has been closed");
+      return readTurn();
+    };
+
+    const answer = await turn(bridge, "hello", headers());
+    assert.equal(answer.choices[0].message.content, "ok", "the retried read is what answers the turn");
+    assert.equal(reads, 2, "the first read died, the retry read again");
+    assert.equal(bridge.sent.length, 1, "one send however many reads: the prompt was already Arena's");
+    assert.match(bridge.sent[0], /endpoint: https:\/\/tunnel-a/);
+    assert.equal(
+      bridge.sent.filter((p) => p.includes("endpoint: https://tunnel-a")).length,
+      1,
+      "a second send would have delivered the one-shot preamble twice",
+    );
+    assert.equal(page.landed, `https://arena.ai/agent/${SESSION}`, "the retry needs the origin: its fetches are relative");
+  });
+
+  test("the retry does not navigate again when the page is already on the session", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    const navigations = [];
+    const page = {
+      url: () => `https://arena.ai/agent/${SESSION}`,
+      goto: async (url) => {
+        navigations.push(url);
+      },
+    };
+    bridge.browser = {
+      withAccount: async (_account, fn) => fn(),
+      getPage: async () => page,
+      browser: { isConnected: () => true },
+    };
+
+    let reads = 0;
+    bridge.readLatestTurn = async () => {
+      reads += 1;
+      if (reads === 1) throw new Error("Execution context was destroyed");
+      return readTurn();
+    };
+
+    await turn(bridge, "hello", headers());
+    assert.equal(bridge.sent.length, 1);
+    assert.deepEqual(navigations, [], "a page already on the session must not pay the 18-48s navigation again");
+  });
 });

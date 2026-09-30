@@ -437,6 +437,28 @@ export class Bridge {
     return this.browser.getPage(account || this.#credential(), purpose);
   }
 
+  /**
+   * Put a page on the session, and say whether that meant navigating.
+   *
+   * §4.29 — navigating to /agent/<id> costs 18–48s (SPA hydration) and adds
+   * Cloudflare exposure (§4.24), so a caller that is already where it needs to
+   * be must not pay for another one. Two callers: appendAgentMessage, which
+   * needs the composer, and a retry that only needs the ORIGIN — the reads are
+   * relative fetches, and a page that replaced a torn-down one starts on
+   * about:blank.
+   */
+  async #landOnSession(page, sessionId) {
+    const target = `https://arena.ai/agent/${sessionId}`;
+    let current = "";
+    try {
+      current = page.url() || "";
+    } catch {
+      /* a page that is closing has no url to give */
+    }
+    if (current.startsWith(target)) return false;
+    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    return true;
+  }
 
   async createAgentSession(page, prompt) {
     await page.goto("https://arena.ai/agent", { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -473,27 +495,14 @@ export class Bridge {
   }
 
   async appendAgentMessage(page, state, prompt) {
-    // §4.29 — page reuse. Navigating to /agent/<id> costs 18–48s per call
-    // (SPA hydration) and adds Cloudflare exposure (see §4.24). When the target
-    // session is ALREADY the page we are on, skip the navigation entirely and
-    // only re-check that the composer is actually there.
-    const targetUrl = `https://arena.ai/agent/${state.id}`;
-    const currentUrl = (() => {
-      try {
-        return page.url() || "";
-      } catch {
-        return "";
-      }
-    })();
-    const reusePage = currentUrl.startsWith(targetUrl);
+    // §4.29 — page reuse: when the target session is ALREADY the page we are on,
+    // skip the navigation entirely and only re-check that the composer is there
+    // (see #landOnSession for what the navigation costs).
+    const navigated = await this.#landOnSession(page, state.id);
+    const reusePage = !navigated;
     if (reusePage) {
       log.info("bridge", "appendAgentMessage: reusing open session page (no navigation)", {
         sessionId: state.id,
-      });
-    } else {
-      await page.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
       });
     }
     // The arena SPA can take well over 20s to become interactive (slow /
@@ -1424,8 +1433,20 @@ export class Bridge {
       // One full attempt: navigate to the session, dismiss the "继续工作" review
       // modal if present, fill the composer the Arena模型助手 way, click the real
       // Send button (§4.11), then read ONLY the most-recent turn (§4.12.3).
+      //
+      // `delivered` is what separates the two halves for the retry below. The
+      // retry exists because the PAGE died, which says nothing about the send:
+      // once appendAgentMessage has returned, the prompt is in the session, and
+      // running the whole attempt again would put the user's message — and the
+      // one-shot MCP preamble decorate folded into it — in front of the model a
+      // second time. So a retry after a delivered prompt re-reads instead. The
+      // read needs nothing the send produced (it reconnects /out and tells our
+      // turn from the replayed history by the replay gap, §4.31), but it does
+      // need the page to be on the session: its fetches are relative.
+      let delivered = false;
       const runOnce = async () => {
         const page = await this.#page(account, purpose);
+        if (delivered) await this.#landOnSession(page, sessionId);
         // Acquire the session public-access-token up front (re-used below).
         let token = "";
         try {
@@ -1445,13 +1466,19 @@ export class Bridge {
           marker,
         };
         sessionState = state;
-        await this.appendAgentMessage(page, state, prompt);
-        // The prompt is Arena's now, so this Session really has been told —
-        // this is the moment the one-shot preamble and the pending manual
-        // re-injection are finally spent (ticket 21). A read failure past this
-        // point must NOT give them back: Arena has already seen the text, and
-        // re-injecting would duplicate it.
-        this.commitLocalCapability(injection);
+        if (!delivered) {
+          await this.appendAgentMessage(page, state, prompt);
+          // The prompt is Arena's now, so this Session really has been told —
+          // this is the moment the one-shot preamble and the pending manual
+          // re-injection are finally spent (ticket 21). A read failure past this
+          // point must NOT give them back: Arena has already seen the text, and
+          // re-injecting would duplicate it.
+          //
+          // Marked before the commit, not after: the commit writes to disk, and
+          // a failed ledger write is still not a reason to send the turn twice.
+          delivered = true;
+          this.commitLocalCapability(injection);
+        }
         return this.readLatestTurn(page, state, upstreamSink);
       };
       let parsed;
@@ -1474,6 +1501,10 @@ export class Bridge {
           log.warn("bridge", "converse: browser/page closed mid-run; recreating and retrying once", {
             sessionId,
             message: msg,
+            // false means the retry re-reads the session instead of sending the
+            // prompt again: that is what stops one teardown from delivering the
+            // message (and its preamble) twice.
+            willResend: !delivered,
           });
           let browserAlive = false;
           try {
