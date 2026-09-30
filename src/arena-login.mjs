@@ -7,6 +7,98 @@ import { installProbe } from "./probe/index.mjs";
 
 const require = createRequire(import.meta.url);
 
+// ── the deployment pin ──────────────────────────────────────────────────────
+//
+// Arena builds a Session against whichever of its Vercel deployments answers
+// the create-chat POST, and that deployment decides which Trigger.dev task
+// version the Session is locked to (`triggerConfig.lockToVersion`). Since
+// 2026-09-30 the current deployment locks new Sessions to 20260930.20, and that
+// task version no longer hands the page a run-scoped `public-access-token` — the
+// only thing that lets the page read the run's own trace, and therefore its
+// model name. The previous deployment still answers, still locks to 20260930.5,
+// and that version still delivers the token.
+//
+// What actually carries the pin was measured on arena.ai rather than assumed.
+// Arena serves its web frontend and its API from two different Vercel
+// deployments — one navigation to /agent returns assets stamped `?dpl=<web>`
+// while the page's own XHR answers `x-arena-api-deployment: <api>` — and
+// `__vdpl` only selects a deployment inside whichever of the two is being
+// asked. Measured with the cookie installed on the whole context: navigations
+// to `/` and `/agent` came back from the same web deployment as without it, and
+// a same-origin `/api/*` call from the page came back from the same API
+// deployment as without it. The cookie therefore does not in practice drag the
+// page, or the rest of the context, onto the pinned deployment — even though
+// Vercel documents it as pinning "that request ... including document
+// navigations". Verified via `document.cookie` that it was really being sent.
+//
+// Two things carry the pin instead, and the stamp comes off on the create-chat
+// path ONLY: Arena's SPA otherwise attaches `x-arena-web-deployment` /
+// `x-deployment-id` naming the current deployment, and the server prefers those
+// over the cookie.
+//
+// create-chat needs BOTH halves, measured end-to-end by creating real Sessions
+// with one half switched off at a time. With the cookie and the strip both in
+// place the new Session reports `lockToVersion` 20260930.5 and its `/out` stream
+// carries a run-scoped token. With either half removed — or with the pin off
+// entirely — it reports 20260930.20 and the stream carries no run token at all.
+// So the cookie alone changes nothing here (Arena's stamp headers win over it),
+// and stripping alone changes nothing either (nothing then names the pinned
+// deployment). For `/api/*` the decider is Arena's own headers rather than the
+// cookie: naming the pinned id in `x-arena-web-deployment`, `x-deployment-id`
+// AND `x-arena-api-deployment` together routes the request there (it answers
+// with `x-arena-api-deployment: dpl_HDHBFo2Fyx5bx9ABr4Uau7kdXfhL` and
+// `x-arena-trigger-version: 20260930.5`), while `?dpl=` or `x-deployment-id`
+// alone are refused with 409 refresh_required. A header-only pin is the cleaner
+// shape, and the first thing to try if this needs revisiting.
+//
+// This is a stopgap pinned to one Arena deployment. When Arena deletes it the
+// model name goes back to reading as unknown (a Session created by the current
+// deployment carries no run token at all). ARENA_DEPLOYMENT_PIN overrides the
+// id; `none` turns the whole thing off.
+export const DEPLOYMENT_PIN_COOKIE = "__vdpl";
+export const DEPLOYMENT_PIN = "dpl_DaEk6YQDh7utsYDiEtpTgeRc5jct";
+export const DEPLOYMENT_STAMP_HEADERS = Object.freeze(["x-arena-web-deployment", "x-deployment-id"]);
+export const CREATE_SESSION_PATH = "/nextjs-api/stream/create-chat";
+
+export function deploymentPin(env = process.env) {
+  const value = String(env.ARENA_DEPLOYMENT_PIN ?? "").trim();
+  if (value === "none") return "";
+  return value || DEPLOYMENT_PIN;
+}
+
+/**
+ * The create-chat POST with Arena's own deployment stamp removed. Its SPA
+ * attaches `x-arena-web-deployment` / `x-deployment-id` naming the current
+ * deployment to the requests it makes, and the server prefers those over the
+ * `__vdpl` cookie — which is why they come off for this one path. A copy, so
+ * the caller's header object is left alone.
+ */
+export function withoutDeploymentStamp(headers) {
+  const kept = { ...headers };
+  for (const name of DEPLOYMENT_STAMP_HEADERS) delete kept[name];
+  return kept;
+}
+
+/**
+ * Make `context`'s create-chat POSTs land on the pinned deployment. Registered
+ * per context, because the cookie and the route both live and die with it.
+ */
+async function installDeploymentPin(context, pin) {
+  if (!pin) return;
+  await context.addCookies([
+    { name: DEPLOYMENT_PIN_COOKIE, value: pin, domain: ".arena.ai", path: "/", secure: true, sameSite: "Lax" },
+  ]);
+  await context.route(`**${CREATE_SESSION_PATH}`, async (route) => {
+    try {
+      const headers = await route.request().allHeaders();
+      await route.continue({ headers: withoutDeploymentStamp(headers) });
+    } catch {
+      // A request we could not rewrite still has to go out.
+      await route.continue().catch(() => undefined);
+    }
+  });
+}
+
 export function resolvePlaywright(omniRoot) {
   const candidates = [];
   if (omniRoot) candidates.push(`${omniRoot}/node_modules/playwright`, `${omniRoot}/node_modules/playwright-core`);
@@ -286,6 +378,10 @@ export class ArenaBrowser {
         }
       });
       if (cookieHeader) await entry.context.addCookies(cookieHeaderToObjects(cookieHeader));
+      // After the Account's own cookies: the pin has to be the __vdpl this
+      // context sends, and the create-chat route has to exist before the page
+      // that will POST it is created.
+      await installDeploymentPin(entry.context, deploymentPin());
       entry.signature = signature;
       entry.staleSince = 0;
       entry.warned = false;
