@@ -430,11 +430,17 @@ export function createServer({ bridge, config }) {
         // body field the GUI sends for convenience.
         const workspace = String(req.headers[WORKSPACE_HEADER] || body.workspace || "").trim();
         const outcome = await bridge.reinjectLocalCapability(sessionId, { [WORKSPACE_HEADER]: workspace });
+        // Ticket 24 — the caller of this route is usually the GUI button, not a
+        // client with headers to set. So the head of the hint names the two
+        // remedies that audience can actually perform; the header stays last,
+        // because it is the one thing a GUI user cannot do.
         const hint = outcome.injected || outcome.pending
           ? ""
           : outcome.reason === "no local endpoint is up"
             ? "本机 MCP 还没起来：先点「一键启动」。"
-            : `没认出工作区：请求里带 ${WORKSPACE_HEADER} 头，或设置 ARENA_MCP_WORKSPACE。`;
+            : `没认出工作区：先在目标项目里跑一轮真实对话（Bridge 会记住这个 Session 属于哪个项目），` +
+              `或放一个 mcp-workspace.txt / 设置 ARENA_MCP_WORKSPACE 作为默认值。` +
+              `HTTP 客户端可以直接带 ${WORKSPACE_HEADER} 头。`;
         return json(res, 200, { sessionId, ...outcome, hint });
       } catch (error) {
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
