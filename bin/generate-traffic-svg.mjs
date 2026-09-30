@@ -77,11 +77,11 @@ function chartPanel({ title, subtitle, values, x, y, width, height, showScale = 
 const history = JSON.parse(await fs.readFile(HISTORY_PATH, "utf8"));
 const days = [...(history.days ?? [])].sort((a, b) => a.date.localeCompare(b.date));
 const points = bucket(days);
-const labels = points.length === 0 ? [] : [
+const labels = points.length === 0 ? [] : [...new Set([
   points[0]?.date,
   points[Math.floor((points.length - 1) / 2)]?.date,
   points.at(-1)?.date,
-].filter(Boolean);
+].filter(Boolean))];
 
 const latest = history.latest_14_days ?? {};
 const views = latest.views?.count;
