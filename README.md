@@ -154,6 +154,13 @@ released under the MIT License; its copyright notice is recorded in [NOTICE.md](
 model-identification probe is part of this project and ships as the single-file artifact
 `assets/arena-model-probe.inject.js`.
 
+
+## Repository Traffic
+
+![Repository Traffic](./assets/traffic.svg)
+
+> Traffic data is collected automatically from GitHub's repository Traffic API. Historical daily data is retained in `assets/traffic-history.json`; GitHub exposes only the most recent 14 days per API request, so the history grows from the first collection onward.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
