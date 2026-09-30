@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updated_at": null,
+  "days": [],
+  "latest_14_days": {
+    "captured_at": null,
+    "views": {
+      "count": null,
+      "uniques": null
+    },
+    "clones": {
+      "count": null,
+      "uniques": null
+    }
+  }
+}
