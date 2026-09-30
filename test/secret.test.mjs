@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { writeSecretFile, icaclsRestrictCommands, restrictSecretFile, currentAccount } from "../src/secret.mjs";
+import { writeSecretFile, icaclsRestrictArgs, restrictSecretFile, currentAccount } from "../src/secret.mjs";
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -104,22 +104,30 @@ test("parseIcalsAces: an inherited ACL shows up as other people having access", 
   assert.ok(aces.some((a) => a.identity === "NT AUTHORITY\\Authenticated Users"));
 });
 
-test("icaclsRestrictCommands: resolve the account, reset the ACL, then leave only that account", () => {
-  assert.deepEqual(icaclsRestrictCommands("D:/data/auth-token.txt", "PC-HOST\\me"), [
-    // First, and non-destructively: the only step that can fail on a name it
-    // cannot resolve, so a bad account costs the file nothing.
-    ["D:/data/auth-token.txt", "/grant:r", "PC-HOST\\me:(F)"],
-    // Then drop every explicit entry (the one just added included), so nothing
-    // a bygone install or a hand-run icacls left behind can survive.
-    ["D:/data/auth-token.txt", "/reset"],
-    // And finally cut inheritance, leaving full control with this account alone.
-    ["D:/data/auth-token.txt", "/inheritance:r", "/grant:r", "PC-HOST\\me:(F)"],
+// One call is enough for a file this module created — and only for such a file.
+// It covers everything Windows puts on one by itself: what the directory hands
+// down, and the two principals that arrive as EXPLICIT entries whenever the
+// directory hands down nothing (the CI runner's temp dir).
+test("icaclsRestrictArgs: drops inheritance, drops the OS principals, grants only the given account", () => {
+  assert.deepEqual(icaclsRestrictArgs("D:/data/auth-token.txt", "PC-HOST\\me"), [
+    "D:/data/auth-token.txt",
+    "/inheritance:r",
+    // By SID, not by name: the display names are translated on a localized
+    // Windows. SYSTEM and Administrators arrive as EXPLICIT entries whenever the
+    // parent directory hands down nothing to inherit (the CI runner's temp dir),
+    // and /inheritance:r cannot remove those.
+    "/remove:g",
+    "*S-1-5-18",
+    "*S-1-5-32-544",
+    "/grant:r",
+    "PC-HOST\\me:(F)",
   ]);
 });
 
-// The ticket-23 acceptance case: the entry three accounts try to hide behind.
-// `Authenticated Users` stands in for any third account, and nothing names it —
-// which is the point, since the fix cannot enumerate what it was not told about.
+// The case three accounts try to hide behind: an entry this module never wrote
+// and cannot enumerate. `Authenticated Users` (SID S-1-5-11) stands in for any
+// of them, and it is planted the way a bygone install or a hand-run
+// `icacls /grant` would leave one.
 test("restrictSecretFile: an explicit grant to a third account does not survive", {
   skip: process.platform !== "win32" && "Windows 之外的平台只有 chmod，见上面那条",
 }, () => {
@@ -138,6 +146,59 @@ test("restrictSecretFile: an explicit grant to a third account does not survive"
   assert.equal(aces.length, 1, `expected one entry, got ${JSON.stringify(aces)}`);
   assert.match(aces[0].identity, new RegExp(`(^|\\\\)${os.userInfo().username}$`, "i"));
   assert.equal(aces[0].rights, "(F)");
+  assert.equal(fs.readFileSync(file, "utf8"), "0123456789abcdef", "tightening must not lose the secret");
+});
+
+// Why the Windows path REPLACES the file instead of tightening the ACL where it
+// stands, in one observation: a read-only target fails the rename (measured:
+// EPERM), and that failure has to be the whole story. An icacls sequence cannot
+// promise as much — clearing an explicit third-party entry takes `/reset`, which
+// re-applies the directory's inheritance and cannot share a command line with
+// the grant that follows it, so a failure between the two leaves the file wider
+// than it was found.
+test("restrictSecretFile: a file it cannot replace keeps the ACL — and the secret — it came with", {
+  skip: process.platform !== "win32" && "Windows 之外的平台走 chmod，原地且原子，见上面那条",
+}, () => {
+  const dir = tempDir("arena-secret-");
+  const file = path.join(dir, "auth-token.txt");
+  fs.writeFileSync(file, "0123456789abcdef");
+  execFileSync("icacls", [file, "/grant", "*S-1-5-11:(R)"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const before = parseIcalsAces(readAcl(file), file);
+  assert.equal(before.length > 1, true, "the sample must start out wider than owner-only");
+
+  // Nothing in an ACL-only path would notice a read-only file; icacls changes
+  // its ACL happily. The rename does notice, which is the difference held here.
+  fs.chmodSync(file, 0o444);
+  try {
+    assert.throws(() => restrictSecretFile(file), "a replacement that did not happen must not read as success");
+  } finally {
+    fs.chmodSync(file, 0o666); // so the temporary directory can be cleaned up
+  }
+
+  assert.deepEqual(
+    parseIcalsAces(readAcl(file), file),
+    before,
+    "no half-applied ACL: the entries are exactly the ones the file came with"
+  );
+  assert.equal(fs.readFileSync(file, "utf8"), "0123456789abcdef", "and the secret is still there");
+  assert.deepEqual(fs.readdirSync(dir), ["auth-token.txt"], "and no temporary file was left behind");
+});
+
+test("restrictSecretFile: refuses a file far larger than a secret", {
+  skip: process.platform !== "win32" && "只有 Windows 的替换路径把内容读进内存",
+}, () => {
+  const dir = tempDir("arena-secret-");
+  const file = path.join(dir, "auth-token.txt");
+  // Sparse: the size is what the guard reads, not the bytes.
+  const big = fs.openSync(file, "w");
+  fs.ftruncateSync(big, 128 * 1024);
+  fs.closeSync(big);
+
+  assert.throws(() => restrictSecretFile(file), (error) => error.code === "secret_too_large");
+  assert.deepEqual(fs.readdirSync(dir), ["auth-token.txt"], "and nothing was staged next to it");
 });
 
 test("currentAccount: names one account, qualified when a domain is known", () => {
@@ -148,8 +209,8 @@ test("currentAccount: names one account, qualified when a domain is known", () =
 // Windows: `mode: 0o600` and chmod are no-ops there, so what has to hold is the
 // ACL — one entry, ours, full control. Anything else still on the file (SYSTEM,
 // Administrators, Authenticated Users…) came from the directory and means the
-// secret is not owner-only. Ticket 23 widened this from "the files this module
-// creates" to every file it tightens: see the third-account case above.
+// secret is not owner-only. That holds for every file this module tightens, not
+// only the ones it creates: see the third-account case above.
 // The secret is either owner-only or absent. A file that the documentation calls
 // private and the filesystem does not is worse than a failed write, so the
 // failure has to reach the caller — and it must leave nothing behind.
