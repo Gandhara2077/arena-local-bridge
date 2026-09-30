@@ -39,3 +39,5 @@ jobs:
           git add assets/traffic-history.json assets/traffic.svg
           git commit -m "chore: update repository traffic"
           git push
+
+# Branch preview trigger is intentionally a push-triggered test path; scheduled collection is for main.
