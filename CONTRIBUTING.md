@@ -20,9 +20,23 @@ npm test
 
 Changes to authentication, session handling, request parsing, credential storage or security-sensitive code should include regression tests where practical.
 
+## Repository layout
+
+~~~text
+src/        Core bridge, server, browser/session handling, harvesting and UI
+bin/        Login, session, verification and diagnostic helpers
+test/       Node.js test suite
+prompts/    Optional installation prompts
+assets/     Public project assets
+~~~
+
 ## Documentation
 
 User-facing behavior changes should update the README or the relevant documentation. Clearly distinguish documented Arena behavior from reverse-engineered or implementation-dependent behavior.
+
+Keep the READMEs a front door: they should stay short and point to the detailed documents (SKILL.md for the
+workflow and API, SECURITY.md for the security model) rather than restating them. README.md and README.zh-CN.md
+are kept in sync; a change to one is a change to both. The remaining documentation is English-only.
 
 ## Pull requests
 
