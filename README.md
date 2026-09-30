@@ -159,9 +159,6 @@ model-identification probe is part of this project and ships as the single-file 
 
 ![Repository Traffic](./assets/traffic.svg)
 
-> Traffic data is collected automatically from GitHub's repository Traffic API. Historical daily data is retained in `assets/traffic-history.json`; GitHub exposes only the most recent 14 days per API request, so the history grows from the first collection onward.
->
-> The workflow uses a repository secret named `TRAFFIC_TOKEN` with **Administration: read** permission, scoped only to this repository. The token is used only to read Traffic; generated history and the SVG are committed with the workflow's normal `GITHUB_TOKEN`.
 
 ## License
 
