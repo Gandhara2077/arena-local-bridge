@@ -6,11 +6,11 @@ import { execFileSync } from "node:child_process";
 
 const ROOT = process.cwd();
 const HISTORY_PATH = path.join(ROOT, "assets", "traffic-history.json");
-const token = process.env.GITHUB_TOKEN;
+const token = process.env.TRAFFIC_TOKEN;
 const repository = process.env.GITHUB_REPOSITORY;
 
 if (!token || !repository) {
-  throw new Error("GITHUB_TOKEN and GITHUB_REPOSITORY are required");
+  throw new Error("TRAFFIC_TOKEN and GITHUB_REPOSITORY are required");
 }
 
 async function getJson(endpoint) {
