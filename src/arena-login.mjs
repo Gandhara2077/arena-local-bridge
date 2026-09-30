@@ -36,13 +36,17 @@ const require = createRequire(import.meta.url);
 // `x-deployment-id` naming the current deployment, and the server prefers those
 // over the cookie.
 //
-// Which of the two actually decides create-chat is NOT isolated — doing that
-// needs a real Session, and the evidence for the pin is end-to-end (a pinned
-// Session reports `lockToVersion` 20260930.5, an unpinned one 20260930.20). For
-// `/api/*` the decider is Arena's own headers rather than the cookie: naming
-// the pinned id in `x-arena-web-deployment`, `x-deployment-id` AND
-// `x-arena-api-deployment` together routes the request there (it answers with
-// `x-arena-api-deployment: dpl_HDHBFo2Fyx5bx9ABr4Uau7kdXfhL` and
+// create-chat needs BOTH halves, measured end-to-end by creating real Sessions
+// with one half switched off at a time. With the cookie and the strip both in
+// place the new Session reports `lockToVersion` 20260930.5 and its `/out` stream
+// carries a run-scoped token. With either half removed — or with the pin off
+// entirely — it reports 20260930.20 and the stream carries no run token at all.
+// So the cookie alone changes nothing here (Arena's stamp headers win over it),
+// and stripping alone changes nothing either (nothing then names the pinned
+// deployment). For `/api/*` the decider is Arena's own headers rather than the
+// cookie: naming the pinned id in `x-arena-web-deployment`, `x-deployment-id`
+// AND `x-arena-api-deployment` together routes the request there (it answers
+// with `x-arena-api-deployment: dpl_HDHBFo2Fyx5bx9ABr4Uau7kdXfhL` and
 // `x-arena-trigger-version: 20260930.5`), while `?dpl=` or `x-deployment-id`
 // alone are refused with 409 refresh_required. A header-only pin is the cleaner
 // shape, and the first thing to try if this needs revisiting.
