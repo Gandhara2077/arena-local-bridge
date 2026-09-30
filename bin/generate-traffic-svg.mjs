@@ -55,22 +55,34 @@ function bucket(days) {
   return out;
 }
 
-function chartPanel({ title, subtitle, values, x, y, width, height, showScale = true }) {
-  const max = Math.max(...values, 1);
+function niceMax(value) {
+  if (value <= 1) return 1;
+  const exponent = Math.floor(Math.log10(value));
+  const base = 10 ** exponent;
+  const fraction = value / base;
+  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return niceFraction * base;
+}
+
+function chartPanel({ title, subtitle, values, x, y, width, height }) {
+  const maxValue = Math.max(...values, 1);
+  const max = niceMax(maxValue);
   const path = linePath(values, x, y, width, height, 0, max);
   const area = areaPath(values, x, y, width, height, max);
-  const grid = [0.25, 0.5, 0.75].map((p) => {
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((p) => {
     const gy = y + height * (1 - p);
-    return `<line x1="${x}" y1="${gy.toFixed(1)}" x2="${(x + width).toFixed(1)}" y2="${gy.toFixed(1)}" class="grid"/>`;
+    const value = max * p;
+    return `
+      <line x1="${x}" y1="${gy.toFixed(1)}" x2="${(x + width).toFixed(1)}" y2="${gy.toFixed(1)}" class="grid"/>
+      <text x="${(x - 10).toFixed(1)}" y="${(gy + 3).toFixed(1)}" text-anchor="end" class="scale">${esc(fmt(Math.round(value)))}</text>
+    `;
   }).join("");
-  const top = Math.max(...values);
   return `
     <text x="${x}" y="${y - 22}" class="panel-title">${esc(title)}</text>
     <text x="${x}" y="${y - 6}" class="panel-subtitle">${esc(subtitle)}</text>
-    ${grid}
+    ${ticks}
     <path d="${area}" class="area"/>
     <path d="${path}" class="line"/>
-    ${showScale ? `<text x="${x + width}" y="${y + 12}" text-anchor="end" class="scale">${esc(fmt(top))}</text>` : ""}
   `;
 }
 
@@ -93,8 +105,8 @@ const uniqueClones = latest.clones?.uniques;
 const W = 960;
 const H = 600;
 const pad = 54;
-const chartX = 54;
-const chartW = 852;
+const chartX = 92;
+const chartW = 814;
 const panelH = 126;
 const panel1Y = 232;
 const panel2Y = 432;
