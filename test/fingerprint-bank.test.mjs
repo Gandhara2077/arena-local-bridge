@@ -10,7 +10,13 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fitBank, scoresFor, attribute, calibrateBeta, ORDERED_WEIGHT } from "../src/fingerprint/numeric-bank.mjs";
+import {
+  fitBank,
+  rawScoresFor,
+  attribute,
+  calibrateBeta,
+  ORDERED_WEIGHT,
+} from "../src/fingerprint/numeric-bank.mjs";
 
 /**
  * A synthetic reply. `bias` shifts the value distribution, `spread` controls
@@ -88,19 +94,29 @@ test("a distinct reply is attributed to the model that generated it", () => {
   }
 });
 
-test("scoresFor and attribute agree, and probabilities sum to one", () => {
+test("rawScoresFor and attribute agree, and probabilities sum to one", () => {
   const bank = fitBank(syntheticBank());
   const text = reply({ bias: MODELS.mid, spread: 60, seed: 4242, count: 200 });
-  const scores = scoresFor(text, bank, 200);
+  const raw = rawScoresFor(text, bank, 200);
   const a = attribute(text, bank, { expectedCount: 200 });
-  assert.deepEqual(a.scores, scores);
+  assert.deepEqual(a.rawScores, raw);
   const sum = a.probabilities.reduce((x, y) => x + y, 0);
   assert.ok(Math.abs(sum - 1) < 1e-9);
 });
 
+test("margin is best-minus-second on the RAW scores, not the standardised ones", () => {
+  const bank = fitBank(syntheticBank());
+  const a = attribute(reply({ bias: MODELS.low, spread: 60, seed: 11, count: 200 }), bank, { expectedCount: 200 });
+  const sorted = [...a.rawScores].sort((x, y) => y - x);
+  assert.ok(Math.abs(a.margin - (sorted[0] - sorted[1])) < 1e-12);
+  // Raw scores are cosines, so they live in [-1, 1] and the margin cannot
+  // exceed 2 — unlike the standardised scores, which saturate.
+  assert.ok(a.rawScores.every((s) => s >= -1.0000001 && s <= 1.0000001));
+});
+
 test("a reply too short to fingerprint returns null, not a guess", () => {
   const bank = fitBank(syntheticBank());
-  assert.equal(scoresFor("1 2 3 4 5", bank, 200), null);
+  assert.equal(rawScoresFor("1 2 3 4 5", bank, 200), null);
   assert.equal(attribute("1 2 3 4 5", bank, { expectedCount: 200 }), null);
   // An empty reply is the same case.
   assert.equal(attribute("", bank, { expectedCount: 200 }), null);

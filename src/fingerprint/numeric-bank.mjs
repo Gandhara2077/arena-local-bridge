@@ -113,11 +113,51 @@ export function fitBank(records) {
 }
 
 /**
- * Fused cosine scores of one reply against every model in the bank, in bank
- * order. Returns null when the reply is too short to fingerprint — the caller
- * must treat that as "no answer", never as "some model".
+ * Attribute one reply.
+ *
+ * `beta` sharpens the softmax. It is a fitted parameter, not a taste: with too
+ * small a value everything looks like the same model, with too large a value
+ * the top guess is noise. `calibrateBeta` below fits it on held-out data.
+ *
+ * Returns null when the reply is unscoreable, so a caller can distinguish
+ * "could not fingerprint this" from "fingerprinted it as X".
+ *
+ * Two things are reported, and the difference matters:
+ *
+ *   rawScores — cosine similarity to each centroid, in [−1, 1] against unit
+ *               vectors. This is a measure of absolute fit.
+ *   margin    — best minus second-best raw score. This is what tells a match
+ *               from a non-match, because it does not depend on how many models
+ *               the bank happens to hold.
+ *
+ * `confidence` is a softmax over the *standardised* scores, which is the right
+ * shape for choosing between candidates but a poor gate: with only two models
+ * the standardisation maps any reply to ±1, so a reply belonging to neither
+ * still reports near-certainty. Gates should use `margin`.
  */
-export function scoresFor(text, bank, expectedCount) {
+export function attribute(text, bank, { expectedCount, beta = 3 } = {}) {
+  const raw = rawScoresFor(text, bank, expectedCount);
+  if (!raw) return null;
+  const probabilities = softmax(standardize(raw).map((s) => beta * s));
+  let best = 0;
+  for (let i = 1; i < probabilities.length; i++) if (probabilities[i] > probabilities[best]) best = i;
+  return {
+    model: bank.modelIds[best],
+    confidence: probabilities[best],
+    rawScores: raw,
+    margin: marginOf(raw),
+    probabilities,
+  };
+}
+
+/**
+ * Cosine similarity of a reply to every centroid, unstandardised.
+ *
+ * The two feature layers are fused here exactly as in the bank (0.75 marginal /
+ * 0.25 ordered), and the result is left as a plain cosine so it can be compared
+ * across banks of different sizes.
+ */
+export function rawScoresFor(text, bank, expectedCount) {
   const numbers = parseNumbers(text);
   if (!isUsable(numbers, expectedCount)) return null;
 
@@ -129,7 +169,24 @@ export function scoresFor(text, bank, expectedCount) {
   const of = standardizeAgainst(orderedBlockFeature(numbers), o.orderedMean, o.orderedScale);
   const ordered = unitAgainst(of, o.centroids, bank.modelIds);
 
-  return standardize(marginal.map((m, i) => (1 - ORDERED_WEIGHT) * m + ORDERED_WEIGHT * ordered[i]));
+  return marginal.map((m, i) => (1 - ORDERED_WEIGHT) * m + ORDERED_WEIGHT * ordered[i]);
+}
+
+/** Best raw score minus second-best; 0 when there is nothing to choose between. */
+export function marginOf(scores) {
+  if (scores.length < 2) return 0;
+  const sorted = [...scores].sort((a, b) => b - a);
+  return sorted[0] - sorted[1];
+}
+
+/**
+ * The standardised fused scores, which is what the softmax wants as input.
+ * Kept as a separate function because `rawScoresFor` is the honest measure and
+ * this is the presentational one.
+ */
+export function scoresFor(text, bank, expectedCount) {
+  const raw = rawScoresFor(text, bank, expectedCount);
+  return raw ? standardize(raw) : null;
 }
 
 function unitAgainst(feature, centroids, modelIds) {
@@ -140,30 +197,6 @@ function unitAgainst(feature, centroids, modelIds) {
     for (let i = 0; i < feature.length; i++) s += (feature[i] / norm) * c[i];
     return s;
   });
-}
-
-/**
- * Attribute one reply.
- *
- * `beta` sharpens the softmax. It is a fitted parameter, not a taste: with too
- * small a value everything looks like the same model, with too large a value
- * the top guess is noise. `calibrateBeta` below fits it on held-out data.
- *
- * Returns null when the reply is unscoreable, so a caller can distinguish
- * "could not fingerprint this" from "fingerprinted it as X".
- */
-export function attribute(text, bank, { expectedCount, beta = 3 } = {}) {
-  const scores = scoresFor(text, bank, expectedCount);
-  if (!scores) return null;
-  const probabilities = softmax(scores.map((s) => beta * s));
-  let best = 0;
-  for (let i = 1; i < probabilities.length; i++) if (probabilities[i] > probabilities[best]) best = i;
-  return {
-    model: bank.modelIds[best],
-    confidence: probabilities[best],
-    scores,
-    probabilities,
-  };
 }
 
 /**

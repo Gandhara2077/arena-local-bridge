@@ -19,6 +19,7 @@ import { stats as archiveStats, readEntries, removeEntries, sessionAccountEmail,
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
 import { readSnapshot } from "./probe/index.mjs";
+import { identify, bankStatus, variantIds, probePrompt } from "./fingerprint/index.mjs";
 import { VERSION } from "./version.mjs";
 import {
   bind,
@@ -111,6 +112,57 @@ export async function runReprobe({ bridge, sessionId, accountEmail, prompt }) {
   } catch (error) {
     return { found: null, failure: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * 补标 via the numeric fingerprint — the path that still works now that the
+ * probe's route to a model name is gone.
+ *
+ * The probe used to learn the Model by observing a run. That route is closed:
+ * Arena no longer issues the run-scoped token the trace needs, and nothing else
+ * in agent mode carries a model id. What it leaves us is the reply itself, and
+ * the reply is enough to fingerprint.
+ *
+ * This runs a probe turn, attributes the answer against the collected bank, and
+ * reports what it got. It is deliberately explicit about the three outcomes:
+ *
+ *   attributed — a model name, with the margin that earned it
+ *   unresolved — a fingerprint was taken but did not clear the gate; the near
+ *                miss is reported and NOTHING is written to the archive
+ *   failed     — no usable fingerprint, so no claim at all
+ *
+ * Writing only on a cleared gate is the whole point. The archive's Model column
+ * is read by everything downstream, so a guess written there is worse than the
+ * 未识别 it replaces.
+ */
+export async function runFingerprintReprobe({ bridge, sessionId, accountEmail, dataDir, variant, store = true }) {
+  try {
+    const account = bridge.credentials.forSession(accountEmail);
+    const outcome = await bridge.browser.withAccount(account, () =>
+      identify({
+        dataDir,
+        variant,
+        store,
+        ask: async (prompt) => {
+          const payload = await bridge.converse(
+            sessionId,
+            { messages: [{ role: "user", content: prompt }] },
+            { injectMcp: false, account, accountEmail, purpose: "fingerprint" }
+          );
+          return extractCompletionText(payload);
+        },
+      })
+    );
+    return { outcome, failure: null };
+  } catch (error) {
+    return { outcome: null, failure: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** The assistant text out of an OpenAI-shaped completion, or "". */
+export function extractCompletionText(payload) {
+  const message = payload?.choices?.[0]?.message;
+  return typeof message?.content === "string" ? message.content : "";
 }
 
 function busyError() {
@@ -288,9 +340,13 @@ export function createServer({ bridge, config }) {
    * Shared entry guard for the two ModelPool actions that drive one real turn.
    * Returns the validated session id, or null when a response was already sent.
    */
-  async function poolSessionId(req, res) {
-    const body = await readBody(req);
-    const sid = String(body.sessionId || "").trim();
+  async function poolSessionId(req, res, body = null) {
+    // A request body stream can only be read once: readBody resolves on `end`,
+    // and a second call re-registers listeners that will never fire again, so
+    // the request hangs instead of failing. Callers that need a field of their
+    // own must pass the body they already read rather than reading it again.
+    const parsed = body ?? (await readBody(req));
+    const sid = String(parsed.sessionId || "").trim();
     if (!isSessionId(sid)) {
       json(res, 400, { error: { message: "sessionId must be a UUID" } });
       return null;
@@ -540,6 +596,101 @@ export function createServer({ bridge, config }) {
         const updated = updateModel(config.archiveDir, sid, found.model);
         log.info("server", "pool reprobe", { sessionId: sid, model: found.model, updated: Boolean(updated) });
         return json(res, 200, { ok: true, sessionId: sid, model: found.model, updated: Boolean(updated) });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    }
+
+    // 补标（指纹） — identify a Model by fingerprint when the probe cannot.
+    //
+    // The 补标 route above reads the Model from a run the probe observed. That
+    // route is closed on current Arena: the run-scoped token the trace needs is
+    // no longer issued, so it answers `unresolved` every time. This one asks a
+    // different question — what numbers does this Session's model pick — and
+    // answers from a bank collected earlier.
+    //
+    // It writes to 记录.json ONLY when the attribution clears its gate. A near
+    // miss is reported and discarded: the Model column feeds everything
+    // downstream, so a plausible guess there is worse than 未识别.
+    //
+    // `dryRun` takes the fingerprint and reports it without touching the store
+    // or the archive, which is how a bank gets validated against known Sessions.
+    if (req.method === "POST" && url.pathname === "/api/pool/fingerprint-reprobe") {
+      try {
+        const body = await readBody(req).catch(() => ({}));
+        const sid = await poolSessionId(req, res, body);
+        if (!sid) return;
+        const dryRun = Boolean(body.dryRun);
+        const variant = body.variant ?? variantIds()[0];
+        try {
+          probePrompt(variant);
+        } catch {
+          return json(res, 400, { error: { message: `unknown probe variant: ${variant}` } });
+        }
+        const store = !dryRun;
+        turnsInFlight += 1;
+        let outcome;
+        try {
+          outcome = await runFingerprintReprobe({
+            bridge,
+            sessionId: sid,
+            accountEmail: sessionAccountEmail(config.archiveDir, sid),
+            dataDir: config.dataDir,
+            variant,
+            store,
+          });
+        } finally {
+          turnsInFlight -= 1;
+        }
+        const { outcome: result, failure } = outcome;
+        if (!result || result.status === "failed") {
+          return json(res, 200, { ok: false, sessionId: sid, unresolved: true, error: failure || result?.reason || null });
+        }
+        if (result.status === "unresolved") {
+          log.info("server", "pool fingerprint reprobe unresolved", {
+            sessionId: sid,
+            nearMiss: result.nearMiss,
+            margin: Number(result.margin?.toFixed(3)),
+          });
+          return json(res, 200, {
+            ok: false,
+            sessionId: sid,
+            unresolved: true,
+            nearMiss: result.nearMiss,
+            margin: result.margin,
+            confidence: result.confidence,
+            error: result.reason,
+          });
+        }
+        if (dryRun) {
+          return json(res, 200, { ok: true, sessionId: sid, model: result.model, margin: result.margin, confidence: result.confidence, updated: false, dryRun: true });
+        }
+        const updated = updateModel(config.archiveDir, sid, result.model);
+        log.info("server", "pool fingerprint reprobe", {
+          sessionId: sid,
+          model: result.model,
+          margin: Number(result.margin.toFixed(3)),
+          updated: Boolean(updated),
+        });
+        return json(res, 200, {
+          ok: true,
+          sessionId: sid,
+          model: result.model,
+          margin: result.margin,
+          confidence: result.confidence,
+          updated: Boolean(updated),
+        });
+      } catch (error) {
+        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    }
+
+    // What the fingerprint bank currently holds, and whether it can attribute.
+    // Reported separately from any turn so the answer to "is this usable yet"
+    // costs nothing.
+    if (req.method === "GET" && url.pathname === "/api/fingerprint/status") {
+      try {
+        return json(res, 200, { ok: true, ...bankStatus(config.dataDir) });
       } catch (error) {
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
       }

@@ -898,18 +898,32 @@ async function reprobeSession(btn) {
   const html = btn.innerHTML;
   btn.disabled = true;
   btn.textContent = "识别中";
-  // 补标必须真的发一轮对话——探针只有观察到一次 run 才知道模型名，只加载
-  // 页面是拿不到的。所以它和体检一样慢（实测约 90 秒）。不先说清楚的话，
-  // 这一分钟多的等待看起来就像卡死了。
+  // 补标必须真的发一轮对话——只加载页面拿不到任何东西。所以它和体检一样慢
+  // （实测约 90 秒）。不先说清楚的话，这一分钟多的等待看起来就像卡死了。
   toast("正在发一轮对话重新识别…约 1–2 分钟，请勿关闭页面");
   try {
-    const r = await mcpApi("/api/pool/reprobe", {
+    // Two routes, tried in order. The probe route reads the Model from a run it
+    // observed, which current Arena no longer supports; the fingerprint route
+    // asks the model to pick numbers and matches the answer against the bank.
+    // Both cost a turn on Arena, so the probe is only tried first — a fingerprint
+    // probe is spent only when the bank can actually attribute.
+    let r = await mcpApi("/api/pool/reprobe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: sid }),
+    });
+    if (r && r.ok && r.model) {
+      toast("已识别为 " + r.model);
+      return;
+    }
+    r = await mcpApi("/api/pool/fingerprint-reprobe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId: sid }),
     });
     if (r && r.error) toast("补标失败：" + r.error.message, true);
-    else if (r && r.ok) toast("已识别为 " + r.model);
+    else if (r && r.ok && r.model) toast("指纹识别为 " + r.model + "（margin " + Number(r.margin).toFixed(2) + "）");
+    else if (r && r.nearMiss) toast("指纹最接近 " + r.nearMiss + "，但未达阈值，未写入", true);
     else toast("仍未识别到模型", true);
   } catch (e) {
     toast("补标失败：" + e.message, true);

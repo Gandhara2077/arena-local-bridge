@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateCompletion, RateLimiter, exposesBridgeKey, runReprobe } from "../src/server.mjs";
+import { validateCompletion, RateLimiter, exposesBridgeKey, runReprobe, runFingerprintReprobe, extractCompletionText } from "../src/server.mjs";
+import { appendRecord } from "../src/fingerprint/bank-store.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // A Session's Model may only ever be attributed through its OWN Account. The
 // pool also has a default pick, and the two are routinely different Accounts —
@@ -161,4 +165,115 @@ test("RateLimiter allows up to rpm then blocks with retryAfter", () => {
   assert.ok(blocked.retryAfter >= 1);
   // window resets
   assert.equal(limiter.allow("k", now + 61_000).allowed, true);
+});
+
+// ── the fingerprint reprobe ─────────────────────────────────────────────────
+//
+// The probe-based reprobe above is kept, but the route it depends on is closed
+// on current Arena. This path is the one that still produces an answer, so what
+// matters here is not that it runs a turn — it is that it writes NOTHING unless
+// the attribution cleared its gate.
+
+const REPLY_FOR = (base, salt = 0, count = 240) =>
+  Array.from({ length: count }, (_, i) => {
+    const jitter = ((i * 37 + salt * 53) % 60) - 30;
+    return Math.min(355, Math.max(1, base + jitter));
+  }).join(" ");
+
+const FLAT_REPLY = Array.from({ length: 240 }, (_, i) => (i % 355) + 1).join(" ");
+
+/** A throwaway data dir holding a two-model, two-variant bank. */
+function seededBankDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "arena-fpreprobe-"));
+  for (const [model, base] of [["m1", 70], ["m2", 270]]) {
+    for (const variant of ["v1-instant", "v2-gut"]) {
+      for (let rep = 0; rep < 3; rep++) {
+        appendRecord(dir, { text: REPLY_FOR(base, rep), model, variant, requestedCount: 240 });
+      }
+    }
+  }
+  return dir;
+}
+
+/** A bridge whose converse returns `reply` and records which Account it used. */
+function fingerprintBridge(reply, { seen = [], turnFails = false } = {}) {
+  return {
+    credentials: fakeCredentials(),
+    browser: {
+      withAccount: async (credential, fn) => {
+        seen.push(`lease:${credential?.email}`);
+        return fn();
+      },
+    },
+    converse: async (id, body, options) => {
+      seen.push(`turn:${options.account?.email}:${options.purpose}`);
+      if (turnFails) throw new Error("turn died");
+      return { choices: [{ message: { role: "assistant", content: reply } }] };
+    },
+  };
+}
+
+test("runFingerprintReprobe: the turn runs as the Session's owner, by its own purpose", async () => {
+  const seen = [];
+  const { outcome, failure } = await runFingerprintReprobe({
+    bridge: fingerprintBridge(REPLY_FOR(70, 99), { seen }),
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    dataDir: seededBankDir(),
+    variant: "v1-instant",
+  });
+  assert.equal(failure, null);
+  assert.equal(outcome.status, "attributed");
+  assert.equal(outcome.model, "m1");
+  assert.deepEqual(seen, [`lease:${OWNER.email}`, `turn:${OWNER.email}:fingerprint`]);
+});
+
+test("runFingerprintReprobe: a reply matching nothing comes back unresolved with a near miss", async () => {
+  const { outcome, failure } = await runFingerprintReprobe({
+    bridge: fingerprintBridge(FLAT_REPLY),
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    dataDir: seededBankDir(),
+    variant: "v1-instant",
+  });
+  assert.equal(failure, null);
+  assert.equal(outcome.status, "unresolved");
+  assert.equal(outcome.model, null, "an unresolved reprobe must not name a model");
+  assert.ok(outcome.nearMiss);
+});
+
+test("runFingerprintReprobe: no bank means no turn is spent", async () => {
+  const seen = [];
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "arena-fpempty-"));
+  const { outcome, failure } = await runFingerprintReprobe({
+    bridge: fingerprintBridge(REPLY_FOR(70), { seen }),
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    dataDir: empty,
+    variant: "v1-instant",
+  });
+  assert.equal(failure, null);
+  assert.equal(outcome.status, "failed");
+  // The Account lease is context acquisition, not a turn; what must not happen
+  // is a probe turn being sent to Arena to prove something we cannot use.
+  assert.equal(seen.some((entry) => entry.startsWith("turn:")), false, `no turn expected, saw ${seen.join(", ")}`);
+});
+
+test("runFingerprintReprobe: a dead turn is reported, not thrown", async () => {
+  const { outcome, failure } = await runFingerprintReprobe({
+    bridge: fingerprintBridge("", { turnFails: true }),
+    sessionId: "s-1",
+    accountEmail: OWNER.email,
+    dataDir: seededBankDir(),
+    variant: "v1-instant",
+  });
+  assert.equal(outcome, null);
+  assert.match(failure, /turn died/);
+});
+
+test("extractCompletionText reads the assistant text and tolerates everything else", () => {
+  assert.equal(extractCompletionText({ choices: [{ message: { content: "42" } }] }), "42");
+  assert.equal(extractCompletionText({ choices: [{ message: { content: null } }] }), "");
+  assert.equal(extractCompletionText({}), "");
+  assert.equal(extractCompletionText(null), "");
 });
