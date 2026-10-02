@@ -22,7 +22,7 @@ export function decrypt(value, key) {
   const [nonceHex, payloadHex, tagHex] = stored.slice("enc:v1:".length).split(":");
   const decoder = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(nonceHex, "hex"), { authTagLength: 16 });
   decoder.setAuthTag(Buffer.from(tagHex, "hex"));
-  const cleartext = Buffer.concat([decoder.update(Buffer.from(payloadHex, "hex")), decoder.final()]);
+  const cleartext = Buffer.concat([decoder.update(payloadHex, "hex"), decoder.final()]);
   return cleartext.toString("utf8");
 }
 

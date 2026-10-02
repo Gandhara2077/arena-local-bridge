@@ -43,6 +43,12 @@ test("tampered ciphertext fails auth", () => {
   assert.throws(() => decrypt(parts.join(":"), key));
 });
 
+test("odd-length ciphertext hex is rejected rather than truncated", () => {
+  const parts = encrypt("fixture plaintext", key).split(":");
+  parts[3] += "f";
+  assert.throws(() => decrypt(parts.join(":"), key), { code: "ERR_INVALID_ARG_VALUE" });
+});
+
 test("different secrets yield different keys (decrypt fails)", () => {
   const other = deriveKey("other-secret");
   const ct = encrypt("x", key);
