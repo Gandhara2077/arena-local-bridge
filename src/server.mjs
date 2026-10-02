@@ -1007,7 +1007,8 @@ export function createServer({ bridge, config }) {
   // Legacy mode may be reading an endpoint started outside this HTTP server.
   // Its old explicit stop contract stays intact; automatic shutdown must not
   // call that sweep unless this manager actually owns live children.
-  server.stopMcp = () => config.mcpRuntime === "local" || mcp.tunnel || mcp.service ? mcp.stop() : Promise.resolve();
+  server.stopMcp = () => config.mcpRuntime === "local" ? mcp.shutdown()
+    : mcp.tunnel || mcp.service ? mcp.stop() : Promise.resolve();
   server.once("close", () => {
     void server.stopMcp().catch((error) => log.error("mcp", "shutdown failed", { error: error.message }));
   });

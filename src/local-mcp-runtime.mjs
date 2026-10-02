@@ -46,6 +46,7 @@ export class LocalMcpRuntime {
     this.pidFile = "";
     this.reservationFile = "";
     this.revoked = false;
+    this.terminated = false;
   }
 
   status() {
@@ -63,7 +64,9 @@ export class LocalMcpRuntime {
   }
 
   async start({ workspace } = {}) {
+    if (this.terminated) throw failure("Local MCP is shutting down; new starts are disabled", 409, "mcp_shutdown");
     if (this.stopping) await this.stopping;
+    if (this.terminated) throw failure("Local MCP is shutting down; new starts are disabled", 409, "mcp_shutdown");
     const selected = directory(workspace || this.workspace || this.config.mcpWorkspace);
     if (this.workspace && !samePath(selected, this.workspace)) {
       throw failure("Local MCP is already authorized for a different workspace; stop it before switching", 409, "mcp_workspace_conflict");
@@ -189,14 +192,14 @@ export class LocalMcpRuntime {
       child.stdout.unref?.();
       child.stderr.unref?.();
       child.unref?.();
-      writeSecretFile(this.pidFile, JSON.stringify({ owner: this.owner, records: [{ pid: child.pid, exe: this.config.cloudflaredPath }] }));
+      writeSecretFile(this.pidFile, JSON.stringify({ owner: this.owner, records: [{ pid: child.pid, exe: this.config.cloudflaredPath }] }), { overwrite: false });
       const url = await reportedUrl;
       signal.throwIfAborted();
       this.publicUrl = `${url}/mcp`;
       writeSecretFile(this.endpointFile, JSON.stringify({
         url: this.publicUrl, token: this.token, started: new Date().toISOString(),
         runtime: "local", workspace: this.workspace, owner: this.owner,
-      }, null, 2));
+      }, null, 2), { overwrite: false });
       // Bridge accepts this instance's endpoint only after publication succeeds.
       this.config.mcpOwner = this.owner;
     } catch (error) {
@@ -286,6 +289,11 @@ export class LocalMcpRuntime {
     this.endpointFile = "";
     this.pidFile = "";
     this.reservationFile = "";
+  }
+
+  shutdown() {
+    this.terminated = true;
+    return this.stop();
   }
 
   async stop() {

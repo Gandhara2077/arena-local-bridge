@@ -173,6 +173,27 @@ test("foreign endpoint, PID record and concurrent instance reservations are neve
   await winner.stop();
 });
 
+for (const record of ["endpoint", "PID"]) test(`first ${record} publication preserves a foreign record created during startup`, async (t) => {
+  const { config, workspace, runtime, children } = setup(t, "silent");
+  const target = record === "endpoint" ? config.mcpEndpointFile : path.join(config.dataDir, "local-mcp-pids.json");
+  const foreign = JSON.stringify({ owner: "foreign", url: "https://legacy.example", token: "legacy", records: [] });
+  const pending = runtime.start({ workspace });
+  const rejected = assert.rejects(pending, { code: "EEXIST" });
+  // PID publication follows the listener's async listen callback; endpoint
+  // publication follows the child's async URL report. Exercise both windows.
+  if (record === "endpoint") await waitFor(() => children.length === 1);
+  fs.writeFileSync(target, foreign);
+  await waitFor(() => children.length === 1);
+  children[0].stdout.write("https://synthetic-secret.trycloudflare.com\n");
+  await rejected;
+  assert.equal(fs.readFileSync(target, "utf8"), foreign);
+  assert.equal(children[0].killed, true);
+  assert.equal(runtime.status().running, false);
+  assert.equal(config.mcpOwner, undefined);
+  assert.equal(fs.existsSync(path.join(config.dataDir, "local-mcp.lock")), false);
+  assert.deepEqual(fs.readdirSync(config.dataDir).filter((name) => name.endsWith(".tmp")), []);
+});
+
 test("transport configuration and secret paths fail closed before spawning", async (t) => {
   const { config, workspace, runtime, children, dir } = setup(t);
   config.cloudflaredPath = "cloudflared.exe";
@@ -254,4 +275,41 @@ test("a credential path through a junction outside DATA_DIR is refused without t
   await assert.rejects(runtime.start({ workspace }), { status: 400, code: "mcp_secret_path" });
   assert.equal(children.length, 0);
   assert.equal(fs.readFileSync(outside, "utf8"), contents);
+});
+
+test("automatic shutdown rejects a start already queued behind an ordinary stop", async (t) => {
+  const { config, workspace, children, cleanup } = setup(t);
+  const account = { email: "synthetic@test.local" };
+  const bridge = new Bridge({ config, credentials: { list: () => [account], primary: () => account, forSession: () => account }, recaptcha: {} });
+  const server = createServer({ bridge, config });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  cleanup.push(async () => { await server.stopMcp(); await new Promise((resolve) => server.close(resolve)); });
+  const request = (reqPath, body) => httpRequest(server.address().port, { method: "POST", reqPath, headers: { Authorization: `Bearer ${config.bridgeKey}` }, body });
+  const started = await request("/api/mcp/start", { workspace });
+  assert.equal(started.status, 200, started.text);
+  const child = children[0];
+  const kill = child.kill;
+  cleanup.unshift(() => { child.kill = kill; });
+  let killing = false;
+  child.kill = () => { killing = true; return true; };
+  const stopping = request("/api/mcp/stop", {});
+  await waitFor(() => killing);
+  const received = new Promise((resolve) => server.once("request", (req) => req.once("end", resolve)));
+  const queued = request("/api/mcp/start", { workspace });
+  await received;
+  // Let readBody's continuation enter runtime.start while stop is still pending.
+  await new Promise((resolve) => setImmediate(resolve));
+  const shutdown = server.stopMcp();
+  child.signalCode = "SIGKILL";
+  child.emit("exit", null, "SIGKILL");
+  await shutdown;
+  assert.equal((await stopping).status, 200);
+  const response = await queued;
+  assert.equal(response.status, 409, response.text);
+  assert.equal(response.json.error.code, "mcp_shutdown");
+  assert.equal(children.length, 1);
+  assert.equal((await request("/api/mcp/start", { workspace })).status, 409);
+  const status = await httpRequest(server.address().port, { reqPath: "/api/mcp/status", headers: { Authorization: `Bearer ${config.bridgeKey}` } });
+  assert.equal(status.json.running, false);
+  await assert.rejects(httpRequest(Number(new URL(started.json.localUrl).port)), /ECONNREFUSED|socket hang up/);
 });

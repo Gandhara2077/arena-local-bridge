@@ -118,6 +118,40 @@ test("repeated/concurrent starts share the selected workspace and conflicting st
   assert.equal(conflict.json.error.code, "mcp_workspace_conflict");
 });
 
+test("recursive file tools omit an embedded DATA_DIR and its junction while retaining granted reads", async (t) => {
+  const ep = await fixture(t);
+  const workspace = path.dirname(ep.config.dataDir);
+  const visible = path.join(workspace, "visible");
+  const privateNested = path.join(ep.config.dataDir, "nested");
+  const skills = fs.mkdtempSync(path.join(path.dirname(workspace), "runtime-walker-skills-"));
+  t.after(() => fs.rmSync(skills, { recursive: true, force: true }));
+  ep.config.skillRoots = [skills];
+  fs.mkdirSync(visible);
+  fs.mkdirSync(privateNested);
+  const query = "recursive-boundary-marker";
+  fs.writeFileSync(path.join(visible, "public.txt"), query);
+  fs.writeFileSync(path.join(privateNested, "private-secret.txt"), query);
+  fs.writeFileSync(path.join(skills, "SKILL.md"), query);
+  fs.symlinkSync(ep.config.dataDir, path.join(workspace, "private-alias"), process.platform === "win32" ? "junction" : "dir");
+  const started = await api(ep, "/api/mcp/start", { workspace });
+  assert.equal(started.status, 200, started.text);
+  const state = started.json;
+  const [listed, searched, skillList, skillSearch] = await Promise.all([
+    tool(state, "list_dir", { path: workspace, max_depth: 4 }),
+    tool(state, "search_text", { path: workspace, query }),
+    tool(state, "list_dir", { path: skills, max_depth: 4 }),
+    tool(state, "search_text", { path: skills, query }),
+  ]);
+  for (const result of [listed, searched, skillList, skillSearch]) assert.equal(result.isError, undefined, text(result));
+  assert.match(text(listed), /visible\/public\.txt/);
+  assert.match(text(searched), /public\.txt:1: recursive-boundary-marker/);
+  assert.ok(!text(listed).split("\n").some((entry) => entry.startsWith(`${path.basename(ep.config.dataDir)}/`)), text(listed));
+  assert.doesNotMatch(text(listed), /private-alias|private-secret/);
+  assert.doesNotMatch(text(searched), /private-secret|private-alias/);
+  assert.match(text(skillList), /SKILL\.md/);
+  assert.match(text(skillSearch), /SKILL\.md:1: recursive-boundary-marker/);
+});
+
 test("missing/invalid workspace and overlapping skills fail before a listener is granted", async (t) => {
   const ep = await fixture(t);
   for (const body of [{}, { workspace: "relative" }, { workspace: path.join(ep.config.dataDir, "missing") }, { workspace: ep.config.mcpEndpointFile }]) {

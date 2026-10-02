@@ -90,6 +90,9 @@ test("shutdown cleanup failure leaves the keyed API available for stop retry; co
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(child.exitCode, null, `cleanup failed but process exited:\n${output}`);
   assert.equal((await request("/api/mcp/status")).status, 200);
+  const restart = await request("/api/mcp/start", { workspace });
+  assert.equal(restart.status, 409, restart.text);
+  assert.equal(restart.json.error.code, "mcp_shutdown");
   assert.equal((await request("/api/mcp/stop", {})).json.running, false);
   assert.ok(!fs.readFileSync(eventFile, "utf8").includes("browser-closed"));
   child.send("shutdown");
