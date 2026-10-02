@@ -18,57 +18,57 @@ function getArg(flag, def = "") {
   return i >= 0 ? process.argv[i + 1] || def : def;
 }
 
-function b64(buf) {
-  return Buffer.from(buf).toString("base64");
-}
-
 /** Generate an X25519 keypair and return WireGuard-style base64 keys. */
 function generateWgKeys() {
-  const { generateKeyPairSync } = crypto;
-  const kp = generateKeyPairSync("x25519");
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("x25519");
   // Raw 32-byte scalars live at the end of the DER encodings.
-  const pubRaw = kp.publicKey.export({ type: "spki", format: "der" }).subarray(-32);
-  const privRaw = kp.privateKey.export({ type: "pkcs8", format: "der" }).subarray(-32);
-  return { privateKey: b64(privRaw), publicKey: b64(pubRaw) };
+  return {
+    privateKey: privateKey.export({ type: "pkcs8", format: "der" }).subarray(-32).toString("base64"),
+    publicKey: publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64"),
+  };
 }
 
-async function register(publicKey, attempt = 1) {
-  const body = {
+async function register(publicKey) {
+  const body = JSON.stringify({
     key: publicKey,
     install_id: "",
     fcm_token: "",
     referrer: "",
     warp_enabled: true,
     tos: "2020-06-12T00:00:00.000Z",
-  };
-  const res = await fetch(REG_URL, {
-    method: "POST",
-    headers: { "User-Agent": "okhttp/3.12.1", "Content-Type": "application/json" },
-    body: JSON.stringify(body),
   });
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    data = { config: null, errors: [{ message: "non-JSON response" }] };
-  }
-  const cfg = data?.config;
-  if (!res.ok || !cfg?.interface?.addresses?.v4) {
-    const errMsg = data?.errors?.map((e) => e.message).join("; ") || `HTTP ${res.status}`;
-    if (attempt < 3 && (res.status === 429 || /ratelimit|too many/i.test(errMsg))) {
-      await new Promise((r) => setTimeout(r, 3000 * attempt));
-      return register(publicKey, attempt + 1);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await fetch(REG_URL, {
+      method: "POST",
+      headers: { "User-Agent": "okhttp/3.12.1", "Content-Type": "application/json" },
+      body,
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      data = { config: null, errors: [{ message: "non-JSON response" }] };
+    }
+    const config = data?.config;
+    if (response.ok && config?.interface?.addresses?.v4) {
+      return {
+        accountId: data.account?.id || data.id,
+        clientId: config.client_id,
+        addressV4: config.interface.addresses.v4,
+        addressV6: config.interface.addresses.v6,
+        peerPublicKey: config.peers?.[0]?.public_key,
+        peerEndpoint: config.peers?.[0]?.endpoint?.host || "engage.cloudflareclient.com:2408",
+      };
+    }
+
+    const errMsg = data?.errors?.map((error) => error.message).join("; ") || `HTTP ${response.status}`;
+    const limited = response.status === 429 || /ratelimit|too many/i.test(errMsg);
+    if (limited && attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 3000 * attempt));
+      continue;
     }
     throw new Error(`WARP registration failed: ${errMsg}`);
   }
-  return {
-    accountId: data.account?.id || data.id,
-    clientId: cfg.client_id,
-    addressV4: cfg.interface.addresses.v4,
-    addressV6: cfg.interface.addresses.v6,
-    peerPublicKey: cfg.peers?.[0]?.public_key,
-    peerEndpoint: cfg.peers?.[0]?.endpoint?.host || "engage.cloudflareclient.com:2408",
-  };
 }
 
 async function main() {
