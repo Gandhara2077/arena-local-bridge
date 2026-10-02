@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessages, sessionKey, latestTurn, contentText, CLIENT_SESSION_HEADERS, firstHeader } from "../src/format.mjs";
+import crypto from "node:crypto";
+import { formatMessages, sessionKey, latestTurn, contentText, requestedTools, CLIENT_SESSION_HEADERS, firstHeader } from "../src/format.mjs";
 
 const BASH_TOOL = [
   { type: "function", function: { name: "Bash", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
@@ -108,4 +109,31 @@ test("latestTurn slices from last assistant message", () => {
   const sliced = latestTurn(messages);
   assert.equal(sliced.length, 3);
   assert.equal(sliced[0].role, "assistant");
+});
+
+test("formatMessages preserves the complete plain-chat prompt", () => {
+  assert.equal(formatMessages([{ role: "user", content: "hello" }], false, [], { enabled: false }), [
+    "CURRENT TURN — answer/execute this latest user request now:\nhello",
+    "User: hello",
+    "CURRENT-TURN RULE: Respond to the CURRENT TURN at the top of this prompt, not an earlier message. Earlier assistant/user text is historical context only. If the current turn is a Tool result, continue from that exact result.",
+    "NO TOOLS AVAILABLE: This request has no external tools. Do not attempt to run, propose, or reference any tool, command, or function. Answer the user's request directly with text only.",
+  ].join("\n\n"));
+});
+
+test("formatMessages preserves the full stock-runtime, profile and tool-result prompt", () => {
+  const messages = [
+    { role: "system", content: "You are Claude Code, Anthropic's official CLI for Claude. fixture" },
+    { role: "developer", content: "Keep the rules." },
+    { role: "user", content: "Earlier request" },
+    { role: "assistant", content: "Checking", tool_calls: [{ id: "t", function: { name: "Bash", arguments: JSON.stringify({ command: "pwd" }) } }] },
+    { role: "tool", tool_call_id: "t", content: [{ type: "text", text: "output" }] },
+  ];
+  const prompt = formatMessages(messages, true, BASH_TOOL, { ownerName: "Fixture", language: "zh", customInstructions: "Stay precise" });
+  assert.equal(crypto.createHash("sha256").update(prompt).digest("hex"), "18a17dd1c054a0e2ee21714cd78435644841eeba662145463a2e74735c5c128e");
+});
+
+test("requestedTools filters invalid entries and compacts descriptions and schemas", () => {
+  assert.deepEqual(requestedTools([null, {}, { function: { name: 4 } }, {
+    function: { name: "Read_File", description: "two\n words", parameters: { type: "object", description: "discard", properties: { path: { type: "string" } } } },
+  }]), [{ name: "Read_File", normalized: "readfile", description: "two words", parameters: { type: "object", properties: { path: { type: "string" } } } }]);
 });

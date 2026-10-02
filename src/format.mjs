@@ -7,38 +7,43 @@ import { record, compactText, compactSchema } from "./util.mjs";
 export function contentText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return content == null ? "" : JSON.stringify(content);
-  return content
-    .map((part) => {
-      if (typeof part === "string") return part;
+  const pieces = [];
+  for (const part of content) {
+    let text = "";
+    if (typeof part === "string") text = part;
+    else {
       const item = record(part);
-      if (typeof item.text === "string") return item.text;
-      if (item.type === "tool_result") {
+      if (typeof item.text === "string") text = item.text;
+      else if (item.type === "tool_result") {
         const inner = typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? "");
-        return `Tool result (${item.tool_use_id || "tool"}): ${inner}`;
+        text = `Tool result (${item.tool_use_id || "tool"}): ${inner}`;
       }
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
+    }
+    if (text) pieces.push(text);
+  }
+  return pieces.join("\n");
 }
 
 export function requestedTools(tools) {
   if (!Array.isArray(tools)) return [];
-  return tools
-    .map((raw) => record(raw).function)
-    .filter((fn) => fn && typeof fn.name === "string")
-    .map((fn) => ({
+  const requested = [];
+  for (const raw of tools) {
+    const fn = record(raw).function;
+    if (!fn || typeof fn.name !== "string") continue;
+    requested.push({
       name: fn.name,
       normalized: fn.name.toLowerCase().replace(/[^a-z0-9]/g, ""),
       description: typeof fn.description === "string" ? compactText(fn.description.replace(/\s+/g, " "), 220) : "",
       parameters: compactSchema(fn.parameters),
-    }));
+    });
+  }
+  return requested;
 }
 
 export function toolSystemPrompt(tools, includeSchemas = false) {
   const list = requestedTools(tools);
   if (!list.length) return "";
-  return [
+  const lines = [
     "CRITICAL CLAUDE CODE EXTERNAL-TOOL TRANSPORT CONTRACT (applies to this turn):",
     "- You are reasoning for Claude Code on the user's real machine. Arena's workspace is NOT the user's machine.",
     "- NEVER invoke Arena built-in tools/functions (shell, Bash, write_file, read_file, edit_file, ask_user, web, browser, or agents).",
@@ -51,16 +56,15 @@ export function toolSystemPrompt(tools, includeSchemas = false) {
     "- Ask through AskUserQuestion only for a genuinely blocking decision; otherwise make a sensible engineering choice and proceed.",
     "- Keep chain-of-thought private. Return concise progress/final results outside tool calls.",
     `External tool names: ${list.map((t) => t.name).join(", ")}`,
-    ...(includeSchemas
-      ? [
-          "External schemas:",
-          ...list.map(
-            (t) => `- ${t.name}${t.description ? `: ${t.description}` : ""}\n  schema: ${JSON.stringify(t.parameters)}`
-          ),
-        ]
-      : []),
-    "REMINDER: do not call an Arena tool. Print literal <tool> JSON text for the bridge instead.",
-  ].join("\n");
+  ];
+  if (includeSchemas) {
+    lines.push("External schemas:");
+    for (const tool of list) {
+      lines.push(`- ${tool.name}${tool.description ? `: ${tool.description}` : ""}\n  schema: ${JSON.stringify(tool.parameters)}`);
+    }
+  }
+  lines.push("REMINDER: do not call an Arena tool. Print literal <tool> JSON text for the bridge instead.");
+  return lines.join("\n");
 }
 
 export function formatMessages(messages, includeTools, tools, profile) {
@@ -69,22 +73,29 @@ export function formatMessages(messages, includeTools, tools, profile) {
   const system = [];
   let sawToolActivity = false;
   const callNames = new Map();
-  const currentMessage = [...sourceMessages].reverse().find((m) => ["user", "tool"].includes(String(m?.role || "")));
+  let currentMessage;
+  for (let index = sourceMessages.length - 1; index >= 0; index--) {
+    const candidate = sourceMessages[index];
+    if (["user", "tool"].includes(String(candidate?.role || ""))) {
+      currentMessage = candidate;
+      break;
+    }
+  }
   const currentRole = String(currentMessage?.role || "user");
-  const currentText = compactText(
-    contentText(currentMessage?.content)
-      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
-      .trim(),
-    24_000
-  );
   const stripReminders = (value) =>
     String(value).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "");
+  const currentText = compactText(
+    stripReminders(contentText(currentMessage?.content)).trim(),
+    24_000
+  );
   for (const raw of sourceMessages) {
     const message = record(raw);
     const role = String(message.role || "user");
     let text = stripReminders(contentText(message.content)).trim();
     text = compactText(text, role === "system" ? 12_000 : 24_000).trim();
-    if (role === "system" || role === "developer") {
+    switch (role) {
+    case "system":
+    case "developer": {
       if (/^You are Claude Code, Anthropic's official CLI for Claude\./.test(text)) {
         text = [
           "Runtime context: you are the production-grade coding/reasoning engine behind Claude Code on the user's real machine.",
@@ -97,9 +108,9 @@ export function formatMessages(messages, includeTools, tools, profile) {
         ].join(" ");
       }
       if (text) system.push(text);
-      continue;
+      break;
     }
-    if (role === "assistant") {
+    case "assistant": {
       if (/^Available agent types for the Agent tool:/.test(text)) continue;
       const parts = [];
       if (text) parts.push(text);
@@ -112,15 +123,17 @@ export function formatMessages(messages, includeTools, tools, profile) {
         sawToolActivity = true;
       }
       if (parts.length) lines.push(`Assistant: ${parts.join("\n")}`);
-      continue;
+      break;
     }
-    if (role === "tool") {
+    case "tool": {
       const name = callNames.get(message.tool_call_id) || message.name || "tool";
       lines.push(`Tool result (${name}): ${text || "(no output)"}`);
       sawToolActivity = true;
-      continue;
+      break;
     }
-    if (text) lines.push(`User: ${text}`);
+    default:
+      if (text) lines.push(`User: ${text}`);
+    }
   }
   if (sawToolActivity) {
     lines.push(
@@ -154,7 +167,7 @@ export function formatMessages(messages, includeTools, tools, profile) {
         .join("\n")
     );
   }
-  if (system.filter(Boolean).length) chunks.push(system.filter(Boolean).join("\n\n"));
+  if (system.length) chunks.push(system.join("\n\n"));
   if (lines.length) chunks.push(compactText(lines.join("\n\n"), 64_000));
   chunks.push(
     "CURRENT-TURN RULE: Respond to the CURRENT TURN at the top of this prompt, not an earlier message. " +
@@ -216,12 +229,8 @@ export function sessionKey(body, headers) {
 
 export function latestTurn(messages) {
   if (!Array.isArray(messages)) return [];
-  let lastAssistant = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      lastAssistant = i;
-      break;
-    }
+    if (messages[i]?.role === "assistant") return messages.slice(i);
   }
-  return lastAssistant >= 0 ? messages.slice(lastAssistant) : messages;
+  return messages;
 }
