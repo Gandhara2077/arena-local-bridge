@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessages, sessionKey, latestTurn, contentText } from "../src/format.mjs";
+import { formatMessages, sessionKey, latestTurn, contentText, CLIENT_SESSION_HEADERS, firstHeader } from "../src/format.mjs";
 
 const BASH_TOOL = [
   { type: "function", function: { name: "Bash", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
@@ -54,6 +54,43 @@ test("formatMessages includes personal profile when provided", () => {
 test("sessionKey resolves explicit headers first", () => {
   const key = sessionKey({ messages: [{ role: "user", content: "x" }] }, { "x-codex-session-id": "sess-123" });
   assert.equal(key, "sess-123");
+});
+
+test("shared client-session headers are ordered and skip blank values", () => {
+  assert.deepEqual(CLIENT_SESSION_HEADERS, ["x-codex-session-id", "x-session-id", "x-omniroute-session"]);
+  assert.equal(firstHeader({
+    "x-codex-session-id": "  ",
+    "x-session-id": " session-2 ",
+    "x-omniroute-session": "session-3",
+  }, CLIENT_SESSION_HEADERS), "session-2");
+  assert.equal(firstHeader({}, CLIENT_SESSION_HEADERS), "");
+});
+
+test("sessionKey applies the shared header order and fallback precedence", () => {
+  const body = {
+    metadata: {
+      session_id: "metadata-snake",
+      sessionId: "metadata-camel",
+      user_id: JSON.stringify({ session_id: "user-id" }),
+    },
+    session_id: "body-session",
+    conversation_id: "conversation",
+    prompt_cache_key: "prompt-cache",
+    messages: [{ role: "user", content: "x" }],
+  };
+  assert.equal(sessionKey(body, {
+    "x-codex-session-id": " codex ",
+    "x-session-id": "session",
+    "x-omniroute-session": "omni",
+  }), "codex");
+  assert.equal(sessionKey(body, { "x-codex-session-id": " ", "x-session-id": " session ", "x-omniroute-session": "omni" }), "session");
+  assert.equal(sessionKey(body, { "x-omniroute-session": " omni " }), "omni");
+  assert.equal(sessionKey(body, {}), "metadata-snake");
+  assert.equal(sessionKey({ ...body, metadata: { sessionId: "metadata-camel" } }, {}), "metadata-camel");
+  assert.equal(sessionKey({ ...body, metadata: { user_id: JSON.stringify({ session_id: "user-id" }) } }, {}), "user-id");
+  assert.equal(sessionKey({ ...body, metadata: {} }, {}), "body-session");
+  assert.equal(sessionKey({ ...body, metadata: {}, session_id: "", conversation_id: "conversation" }, {}), "conversation");
+  assert.equal(sessionKey({ ...body, metadata: {}, session_id: "", conversation_id: "", prompt_cache_key: "prompt-cache" }, {}), "prompt-cache");
 });
 
 test("sessionKey falls back to prompt hash", () => {
