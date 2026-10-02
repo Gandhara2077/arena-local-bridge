@@ -595,33 +595,6 @@ export class Bridge {
       if (!clicked) await page.waitForTimeout(2_500);
       if (((await editor.count().catch(() => 0))) > 0) break;
     }
-    // ── DIAGNOSTIC: dump composer + buttons at the decision point ──────────
-    try {
-      const diag = await page.evaluate(() => {
-        const vis = (el) => {
-          const r = el.getBoundingClientRect();
-          const s = getComputedStyle(el);
-          return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
-        };
-        const clickables = Array.from(document.querySelectorAll("button, [role='button'], a, [role='menuitem']"))
-          .filter(vis)
-          .map((b) => ({
-            t: (b.innerText || "").trim().replace(/\s+/g, " ").slice(0, 40),
-            a: (b.getAttribute("aria-label") || "").slice(0, 40),
-          }))
-          .filter((x) => x.t || x.a)
-          .slice(0, 60);
-        return {
-          composerEditors: Array.from(document.querySelectorAll('[contenteditable="true"]')).filter(vis).length,
-          dialogs: Array.from(document.querySelectorAll('[role="dialog"]')).filter(vis).length,
-          bodyHead: (document.body.innerText || "").replace(/\s+/g, " ").slice(0, 300),
-          clickables,
-        };
-      });
-      log.info("bridge", "appendAgentMessage diag", { sessionId: state.id, composerReady, diag });
-    } catch (e) {
-      log.warn("bridge", "appendAgentMessage diag failed", { message: String((e && e.message) || e) });
-    }
     try {
       await editor.waitFor({ state: "visible", timeout: 60_000 });
     } catch {
