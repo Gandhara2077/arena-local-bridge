@@ -189,6 +189,28 @@ test("a non-UUID sessionId is rejected", async () => {
   });
 });
 
+test("pool actions reject non-object JSON bodies without rereading the request", async () => {
+  const fx = fixture();
+  const before = readStore(fx.dataDir).records.length;
+  await withServer(fx, REPLY_FOR(70), async ({ port, seen }) => {
+    for (const action of ["fingerprint-reprobe", "reprobe", "verify"]) {
+      for (const body of [null, [], 17, "invalid"]) {
+        const res = await fetch(`http://127.0.0.1:${port}/api/pool/${action}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${BRIDGE_KEY}` },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(res.status, 400, `${action}: ${JSON.stringify(body)}`);
+        assert.match((await res.json()).error.message, /JSON object/);
+      }
+    }
+    assert.equal(seen.length, 0, "invalid input must not start an Arena turn");
+  });
+  assert.equal(modelOf(fx.archiveDir), "未识别");
+  assert.equal(readStore(fx.dataDir).records.length, before);
+});
+
 test("the route is keyed like every other operator action", async () => {
   const fx = fixture();
   await withServer(fx, REPLY_FOR(70), async ({ port }) => {

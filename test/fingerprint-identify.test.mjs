@@ -110,6 +110,39 @@ test("a raised margin gate turns an attribution into an unresolved", async () =>
   assert.equal(strict.model, null);
 });
 
+for (const modelCount of [7, 8, 9]) {
+  test(`a ${modelCount}-model bank accepts exact matches but rejects unknown and ambiguous replies`, async () => {
+    const dir = tmpDir();
+    const samples = Array.from({ length: modelCount }, (_, i) => ({
+      model: `m${i + 1}`,
+      text: Array(240).fill((i + 1) * 35).join(" "),
+    }));
+    for (const sample of samples) {
+      for (const variant of ["v1-instant", "v2-gut"]) {
+        appendRecord(dir, { ...sample, variant, requestedCount: 240 });
+      }
+    }
+    const probe = (text, options = {}) => identify({
+      dataDir: dir, variant: "v1-instant", ask: async () => text, store: false, ...options,
+    });
+    for (const sample of samples) {
+      const result = await probe(sample.text);
+      assert.equal(result.status, "attributed", `${sample.model}: ${result.reason}`);
+      assert.equal(result.model, sample.model);
+    }
+    for (const text of [
+      Array(240).fill(355).join(" "),
+      Array.from({ length: 240 }, (_, i) => (i % 2 ? 35 : 70)).join(" "),
+    ]) {
+      const result = await probe(text);
+      assert.equal(result.status, "unresolved");
+      assert.equal(result.model, null);
+    }
+    const strict = await probe(samples[0].text, { minMargin: 1.9 });
+    assert.equal(strict.status, "unresolved", "explicit raw-margin overrides must be honoured");
+  });
+}
+
 test("a reply too short to fingerprint fails, and never becomes a guess", async () => {
   const dir = tmpDir();
   seedBank(dir);

@@ -15,12 +15,13 @@
  * "unresolved" and hands back what it did infer, so the caller can log a
  * near-miss instead of a wrong answer.
  */
-import { attribute, calibrateBeta } from "./numeric-bank.mjs";
+import { attribute, calibrateBeta, ORDERED_WEIGHT } from "./numeric-bank.mjs";
+import { dotProduct } from "./numeric.mjs";
 import { buildBank, appendRecord, readStore, storeSummary } from "./bank-store.mjs";
 import { probePrompt, probeTurn, variantIds, PROBE_COUNT } from "./probe-prompts.mjs";
 
 /**
- * Minimum raw-score margin before an attribution is reported as a model name.
+ * Default raw-score margin for a two-model bank, and cap for larger banks.
  *
  * Why margin and not the softmax confidence: on a small bank the standardised
  * scores saturate, so every reply — including one that matches nothing — comes
@@ -30,6 +31,25 @@ import { probePrompt, probeTurn, variantIds, PROBE_COUNT } from "./probe-prompts
  * of the two that carries the distinction, so it is what the gate reads.
  */
 export const MIN_MARGIN = 1.2;
+
+/**
+ * A larger bank can put even an ideal match less than 1.2 ahead of its nearest
+ * rival. Cap the default at THIS candidate's own centroid margin, using the
+ * same layer weights as attribution. An unrelated close pair must not weaken
+ * its gate. Degenerate/tied centroids retain the conservative fixed gate.
+ * ponytail: geometry is not open-set calibration; validate rejection rates on
+ * held-out known and unknown models before treating this as an accuracy claim.
+ */
+function defaultMargin(bank, model) {
+  if (bank.modelIds.length <= 2) return MIN_MARGIN;
+  const m = bank.marginal.centroids;
+  const o = bank.ordered.centroids;
+  const score = (id) => (1 - ORDERED_WEIGHT) * dotProduct(m[model], m[id])
+    + ORDERED_WEIGHT * dotProduct(o[model], o[id]);
+  const own = score(model);
+  const gap = own - Math.max(...bank.modelIds.filter((id) => id !== model).map(score));
+  return Number.isFinite(gap) && gap > 1e-12 ? Math.min(MIN_MARGIN, gap) : MIN_MARGIN;
+}
 
 /**
  * Minimum confidence, applied on top of the margin.
@@ -82,7 +102,7 @@ export async function collect({ dataDir, variant, ask, model = "", condition = n
  * a near-miss. Treating it as "failed" would throw away information; treating
  * it as "attributed" would be a lie.
  */
-export async function identify({ dataDir, variant, ask, expectedCount = PROBE_COUNT, threshold = CONFIDENCE_THRESHOLD, minMargin = MIN_MARGIN, store = true }) {
+export async function identify({ dataDir, variant, ask, expectedCount = PROBE_COUNT, threshold = CONFIDENCE_THRESHOLD, minMargin, store = true }) {
   const { bank, reason } = buildBank(dataDir, { expectedCount });
   if (!bank) {
     // Still run nothing: without a bank the probe would cost a turn and prove
@@ -107,7 +127,9 @@ export async function identify({ dataDir, variant, ask, expectedCount = PROBE_CO
   }
   // Both gates, so a large bank's confidence still counts and a small bank's
   // saturated confidence cannot carry a decision on its own.
-  if (result.margin < minMargin || result.confidence < threshold) {
+  const requiredMargin = minMargin === undefined ? defaultMargin(bank, result.model) : minMargin;
+  // Allow only floating-point roundoff at an exact centroid match.
+  if (result.margin + 1e-12 < requiredMargin || result.confidence < threshold) {
     return {
       status: "unresolved",
       model: null,
@@ -116,7 +138,8 @@ export async function identify({ dataDir, variant, ask, expectedCount = PROBE_CO
       nearMiss: result.model,
       reason:
         `top guess ${result.model} at ${(result.confidence * 100).toFixed(1)}% confidence / ` +
-        `${result.margin.toFixed(2)} margin, below the ${minMargin} margin gate`,
+        `${result.margin.toFixed(2)} margin; below the required ${requiredMargin.toFixed(2)} margin ` +
+        `or ${(threshold * 100).toFixed(1)}% confidence gate`,
       rawScores: result.rawScores,
     };
   }

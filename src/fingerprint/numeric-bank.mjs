@@ -127,8 +127,8 @@ export function fitBank(records) {
  *   rawScores — cosine similarity to each centroid, in [−1, 1] against unit
  *               vectors. This is a measure of absolute fit.
  *   margin    — best minus second-best raw score. This is what tells a match
- *               from a non-match, because it does not depend on how many models
- *               the bank happens to hold.
+ *               from a non-match. Its scale depends on the bank's centroid
+ *               geometry, so a fixed gate does not transfer to every bank.
  *
  * `confidence` is a softmax over the *standardised* scores, which is the right
  * shape for choosing between candidates but a poor gate: with only two models
@@ -154,8 +154,8 @@ export function attribute(text, bank, { expectedCount, beta = 3 } = {}) {
  * Cosine similarity of a reply to every centroid, unstandardised.
  *
  * The two feature layers are fused here exactly as in the bank (0.75 marginal /
- * 0.25 ordered), and the result is left as a plain cosine so it can be compared
- * across banks of different sizes.
+ * 0.25 ordered), and the result is left as a plain cosine. Scores remain bounded
+ * across banks, but their gaps depend on the fitted centroids.
  */
 export function rawScoresFor(text, bank, expectedCount) {
   const numbers = parseNumbers(text);

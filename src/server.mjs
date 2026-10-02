@@ -337,15 +337,19 @@ export function createServer({ bridge, config }) {
   }
 
   /**
-   * Shared entry guard for the two ModelPool actions that drive one real turn.
+   * Shared entry guard for the ModelPool actions that drive one real turn.
    * Returns the validated session id, or null when a response was already sent.
    */
-  async function poolSessionId(req, res, body = null) {
+  async function poolSessionId(req, res, body) {
     // A request body stream can only be read once: readBody resolves on `end`,
     // and a second call re-registers listeners that will never fire again, so
     // the request hangs instead of failing. Callers that need a field of their
     // own must pass the body they already read rather than reading it again.
-    const parsed = body ?? (await readBody(req));
+    const parsed = body === undefined ? await readBody(req) : body;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      json(res, 400, { error: { message: "request body must be a JSON object" } });
+      return null;
+    }
     const sid = String(parsed.sessionId || "").trim();
     if (!isSessionId(sid)) {
       json(res, 400, { error: { message: "sessionId must be a UUID" } });
