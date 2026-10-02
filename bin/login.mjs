@@ -7,47 +7,46 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { createInterface } from "node:readline";
+import { createInterface } from "node:readline/promises";
 import { loadDotEnv, loadConfig } from "../src/config.mjs";
 import { CredentialStore } from "../src/credentials.mjs";
 import { ArenaBrowser } from "../src/arena-login.mjs";
 import { log } from "../src/util.mjs";
 
-function promptPassword() {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    rl.question("Password: ", (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
+async function promptPassword() {
+  const input = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return (await input.question("Password: ")).trim();
+  } finally {
+    input.close();
+  }
 }
 
 async function main() {
   const args = process.argv.slice(2);
-  const get = (flag) => {
-    const i = args.indexOf(flag);
-    return i >= 0 ? args[i + 1] : undefined;
-  };
-  const email = get("--email") || get("-e");
-  let password = get("--password") || get("-p") || process.env.ARENA_PASSWORD || "";
+  const values = new Map();
+  for (const [index, flag] of args.entries()) {
+    if (!values.has(flag)) values.set(flag, args[index + 1]);
+  }
+  const email = values.get("--email") || values.get("-e");
   if (!email) {
     console.error("usage: node bin/login.mjs --email <email> [--password <password>]");
     process.exit(2);
   }
-  if (!password) password = await promptPassword();
+  const password = values.get("--password") || values.get("-p") || process.env.ARENA_PASSWORD || await promptPassword();
 
   const dataDir = process.env.DATA_DIR || path.join(os.homedir(), ".arena-bridge");
+  const envPath = path.join(dataDir, ".env");
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const dotEnv = loadDotEnv(path.join(dataDir, ".env"));
+  const dotEnv = loadDotEnv(envPath);
   const config = loadConfig({ ...dotEnv, ...process.env }, { requireBridgeKey: false });
 
   // Provision a local encryption key if missing (persist to DATA_DIR/.env)
   let secret = dotEnv.STORAGE_ENCRYPTION_KEY;
   if (!secret) {
     secret = crypto.randomBytes(32).toString("hex");
-    fs.appendFileSync(path.join(dataDir, ".env"), `\nSTORAGE_ENCRYPTION_KEY=${secret}\n`, { mode: 0o600 });
-    log.info("login", "generated STORAGE_ENCRYPTION_KEY", { file: path.join(dataDir, ".env") });
+    fs.appendFileSync(envPath, `\nSTORAGE_ENCRYPTION_KEY=${secret}\n`, { mode: 0o600 });
+    log.info("login", "generated STORAGE_ENCRYPTION_KEY", { file: envPath });
   }
 
   const credentials = new CredentialStore({
