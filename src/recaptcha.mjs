@@ -17,7 +17,8 @@ export class RecaptchaBroker {
   }
 
   isFresh() {
-    return typeof this.token === "string" && Date.now() - this.tokenAt < this.ttlMs;
+    if (typeof this.token !== "string") return false;
+    return Date.now() - this.tokenAt < this.ttlMs;
   }
 
   /** `credential` is the whole credential, not just its cookie header: the
@@ -27,27 +28,27 @@ export class RecaptchaBroker {
     // One mint at a time. A token is minted on a page of its own, and two
     // concurrent requests would both navigate that one page — each finding the
     // other's document. They want the same token anyway, so the second waits.
-    if (this.pendingMint) return this.pendingMint;
-    this.pendingMint = this.#mint(credential).finally(() => {
-      this.pendingMint = null;
-    });
-    return this.pendingMint;
-  }
-
-  async #mint(credential) {
-    try {
-      this.token = await this.browser.freshRecaptchaToken(credential, this.siteKey);
-      this.tokenAt = Date.now();
-      this.generations += 1;
-      this.lastError = null;
-      log.info("recaptcha", "token generated", { length: this.token.length });
-      return this.token;
-    } catch (error) {
-      this.errors += 1;
-      this.lastError = error.message;
-      if (this.isFresh()) return this.token; // degraded: reuse last valid token
-      throw error;
+    if (!this.pendingMint) {
+      const mint = (async () => {
+        try {
+          this.token = await this.browser.freshRecaptchaToken(credential, this.siteKey);
+          this.tokenAt = Date.now();
+          this.generations += 1;
+          this.lastError = null;
+          log.info("recaptcha", "token generated", { length: this.token.length });
+          return this.token;
+        } catch (error) {
+          this.errors += 1;
+          this.lastError = error.message;
+          if (this.isFresh()) return this.token; // degraded: reuse last valid token
+          throw error;
+        }
+      })();
+      this.pendingMint = mint.finally(() => {
+        this.pendingMint = null;
+      });
     }
+    return this.pendingMint;
   }
 
   status() {
