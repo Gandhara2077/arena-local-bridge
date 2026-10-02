@@ -10,10 +10,10 @@ WARP_DIR="${WARP_DIR:-$HOME/.warp}"
 SOCKS_PORT="${SOCKS_PORT:-40000}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> [1/4] wireproxy binary"
-mkdir -p "$WARP_DIR"
 WP_BIN="$WARP_DIR/wireproxy"
-if [[ ! -x "$WP_BIN" ]]; then
+
+ensure_wireproxy() {
+  if [[ -x "$WP_BIN" ]]; then return; fi
   OS_ARCH="linux_amd64"
   URL="https://github.com/pufferffish/wireproxy/releases/download/v1.0.9/wireproxy_${OS_ARCH}.tar.gz"
   echo "    downloading $URL"
@@ -25,7 +25,15 @@ if [[ ! -x "$WP_BIN" ]]; then
   tar xzf "$WARP_DIR/wp.tgz" -C "$WARP_DIR"
   chmod +x "$WP_BIN"
   rm -f "$WARP_DIR/wp.tgz"
-fi
+}
+
+proxy_is_listening() {
+  ss -tln 2>/dev/null | grep -q ":$SOCKS_PORT"
+}
+
+echo "==> [1/4] wireproxy binary"
+mkdir -p "$WARP_DIR"
+ensure_wireproxy
 echo "    binary: $WP_BIN"
 
 echo "==> [2/4] register WARP account + write config"
@@ -34,14 +42,14 @@ if [[ ! -f "$WARP_DIR/wireproxy.conf" ]]; then
 fi
 
 echo "==> [3/4] start wireproxy"
-if ! ss -tln 2>/dev/null | grep -q ":$SOCKS_PORT"; then
+if ! proxy_is_listening; then
   (cd "$WARP_DIR" && nohup ./wireproxy -c wireproxy.conf > wireproxy.log 2>&1 &)
-  for i in $(seq 1 15); do
-    ss -tln 2>/dev/null | grep -q ":$SOCKS_PORT" && break
+  for ((attempt = 1; attempt <= 15; attempt++)); do
+    if proxy_is_listening; then break; fi
     sleep 1
   done
 fi
-if ! ss -tln 2>/dev/null | grep -q ":$SOCKS_PORT"; then
+if ! proxy_is_listening; then
   echo "ERROR: wireproxy did not start. See $WARP_DIR/wireproxy.log" >&2
   tail -20 "$WARP_DIR/wireproxy.log" >&2 || true
   exit 1
