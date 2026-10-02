@@ -83,6 +83,37 @@ bucket, and identification can be re-run on demand (补标).
 A pool is an **index, not a scheduler**. It never picks a Session for you: conversation context lives on Arena's
 side and is bound to one specific Session, so switching Sessions silently would drop that context.
 
+### Manual numeric fingerprinting (experimental)
+
+The dashboard's **补标** action first tries the execution-trace probe. If it cannot identify a model, it tries
+a numeric fingerprint: one Arena turn asks for integers and compares the reply with the local bank. This
+consumes an additional turn only when the bank is ready, and the prompt becomes part of that Session's history.
+
+Both endpoints require the bridge bearer key:
+
+- `GET /api/fingerprint/status` reports bank readiness without sending an Arena turn.
+- `POST /api/pool/fingerprint-reprobe` accepts `{"sessionId":"<UUID>","dryRun":true}`. Optional `variant`
+  selects a probe template; the default is `v1-instant`.
+- `dryRun: true` still sends a probe turn when the bank is ready, but changes neither the fingerprint bank
+  nor the archive. With `dryRun` omitted or false, the reply is stored in `DATA_DIR/fingerprint-bank.json`.
+- Only an attribution passing both the confidence and raw-margin gates updates the archive's Model.
+  An unresolved result reports `nearMiss`, `margin`, and `confidence` without changing the archived Model.
+  These are statistical inferences, not verified model identities; confidence is not a measured accuracy rate.
+
+The default raw-margin gate is 1.2 for two models. For larger banks it is capped at the winning model's own
+centroid margin against its nearest rival, so an ideal match is not rejected solely by bank geometry.
+This remains a conservative heuristic, not a calibrated false-positive or coverage guarantee; a correct
+top candidate can still be left unresolved.
+
+In the available external reference data's leave-one-condition-out checks, this default gate accepted
+0/288 GPT replies and 0/324 Claude replies. The reported 95.1%/95.7% top-candidate accuracies exclude this
+gate and therefore do not measure successful archive identification. Threshold calibration remains open.
+
+The current dashboard does not initialize or label a bank; it requires a pre-existing local
+`DATA_DIR/fingerprint-bank.json`. An empty or insufficient bank returns a failure without spending a
+fingerprint turn. Automatic fingerprinting during harvesting and automatic beta calibration are not
+connected yet. Real Arena identification accuracy has not been established.
+
 ### Bindings
 
 When a client passes a session UUID as `model`, that is an explicit choice, and the bridge records a **binding**
