@@ -34,6 +34,7 @@ import {
   unbind,
 } from "./pool.mjs";
 import { WORKSPACE_HEADER } from "./mcp-preamble.mjs";
+import { listRecentCodexWorkspaces } from "./codex-workspace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -412,6 +413,9 @@ export function createServer({ bridge, config }) {
     // §4.26 — one-click local MCP bridge (AgentDock + cloudflared tunnel).
     if (url.pathname === "/api/mcp/status") {
       return json(res, 200, await agentdock.status());
+    }
+    if (req.method === "GET" && url.pathname === "/api/mcp/workspaces") {
+      return json(res, 200, listRecentCodexWorkspaces({ sessionsRoot: config.codexSessionsDir }));
     }
 
     // Ticket 14 — the manual re-injection entry: resolve the workspace of a
