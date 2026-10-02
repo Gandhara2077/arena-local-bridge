@@ -442,7 +442,7 @@
                   <rect x="2" y="4" width="20" height="12" rx="2" /><path d="M8 20h8" /><path d="M12 16v4" />
                 </svg>
               </span>
-              <h2>本机 MCP（让 Arena 操作这台电脑）</h2>
+              <h2>本机 MCP（自建运行时）</h2>
             </div>
             <button class="btn-ghost btn-sm" id="mcpRefresh">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -452,6 +452,9 @@
             </button>
           </div>
           <div id="mcpBox"></div>
+          <label for="mcpRuntimeWorkspace" style="display:block;margin-top:10px">工作区绝对目录（仅明确选择此目录）</label>
+          <input id="mcpRuntimeWorkspace" type="text" placeholder="例如 D:\projects\my-project" style="width:100%;margin-top:6px" />
+          <div class="hint">文件工具只允许工作区和配置的只读 skills；DATA_DIR 保持私有。exec_command 以本机用户权限运行，工作目录约束不构成沙箱。</div>
           <div class="row" style="margin-top:10px;margin-bottom:0">
             <button class="btn-primary" id="mcpStart">
               <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
@@ -1117,29 +1120,50 @@ async function mcpRender() {
   let s;
   try { s = await mcpApi("/api/mcp/status"); }
   catch (e) { box.innerHTML = emptyState(ICON.bolt, "MCP 状态读取失败", escapeHtml(e.message)); return; }
+  const local = s.runtime !== "agentdock";
+  const workspace = $("#mcpRuntimeWorkspace");
+  workspace.disabled = !!s.running || !!s.cleanupPending || !!s.transportRunning;
+  if (s.workspace && (!workspace.value || s.running)) workspace.value = s.workspace;
+  $("#mcpReinject").disabled = !s.bridgeInjecting;
+  $("#mcpStop").disabled = !s.running && !s.cleanupPending && !s.transportRunning;
+  $("#mcpStart").disabled = !!s.cleanupPending || (!s.running && !!s.transportRunning);
+  const backend = `<div id="mcpRuntimeState" class="hint" style="margin-bottom:8px">运行时：${local ? "自建 Local MCP（默认）" : "AgentDock（可选兼容）"}</div>`;
+  if (s.cleanupPending) {
+    box.innerHTML = backend + '<span class="pill grey" id="mcpReachability">访问已撤销 · 传输清理未完成</span>' +
+      `<div class="hint" style="margin-top:8px">本地工具当前不可用。${s.transportRunning ? "旧端口只返回拒绝响应，等待传输进程退出。" : "端点或所有权记录仍待清理。"}请重试「停止并收回」；清理完成前不能重新启动或切换工作区。</div>` +
+      (s.lastError ? `<div class="hint" style="color:#b8473f">停止错误：${escapeHtml(s.lastError)}</div>` : "");
+    wire(box); return;
+  }
   if (!s.installed) {
-    box.innerHTML = emptyState(ICON.inbox, "未找到 AgentDock 目录",
+    box.innerHTML = backend + emptyState(ICON.inbox, "未找到可选 AgentDock 目录",
       `${s.dir ? "目录：" + escapeHtml(s.dir) + "<br>" : ""}设置 <code>ARENA_AGENTDOCK_DIR</code> 指向含 agentdock.exe / cloudflared.exe 的文件夹。`);
     wire(box); return;
   }
   if (!s.running) {
-    box.innerHTML = '<span class="pill grey">已停止</span>' +
-      `<div class="hint" style="margin-top:8px">点「一键启动」会：开公网临时隧道 → 起本机 MCP 服务 → bridge 自动把端点告诉 Arena。<b>用完务必点「停止并收回」。</b></div>`;
+    box.innerHTML = backend + '<span class="pill grey">已停止</span>' +
+      `<div class="hint" style="margin-top:8px">${local
+        ? "填写工作区后启动本机 127.0.0.1 监听器。" + (s.transportConfigured
+          ? "已明确配置 cloudflared；启动时会另外打开公网隧道，并把端点告诉 Arena。"
+          : "Arena 远端当前不可达；如需连接，显式配置 ARENA_CLOUDFLARED_PATH（开源 cloudflared 的绝对路径，无自动下载）。")
+        : "已显式选择 AgentDock 兼容模式；启动会打开公网隧道。"}<b>用完点「停止并收回」。</b></div>` +
+      (s.lastError ? `<div class="hint" style="color:#b8473f">上次错误：${escapeHtml(s.lastError)}</div>` : "");
     wire(box); return;
   }
-  const line = `MCP: ${s.url} | header: Authorization: Bearer ${s.token}`;
-  box.innerHTML = '<div style="margin-bottom:10px"><span class="pill">运行中 · 公网可访问</span></div>' +
-    field("MCP 端点（公网）", s.url, "mcpUrl") +
+  box.innerHTML = backend + `<div style="margin-bottom:10px"><span class="pill" id="mcpReachability">${s.bridgeInjecting ? "运行中 · 公网隧道已发布" : "运行中 · 仅本机，Arena 远端不可达"}</span></div>` +
+    (s.localUrl ? field("MCP 端点（仅本机）", s.localUrl, "mcpLocalUrl") : "") +
+    (s.bridgeInjecting ? field("MCP 端点（公网）", s.url, "mcpUrl") : "") +
     field("Bearer token", s.token, "mcpToken") +
-    field("注入给 Arena 的那句话（仅供查看/手工粘贴）", line, "mcpLine") +
-    `<div class="hint"><b style="color:#b8473f">注意：</b>隧道开着期间，任何拿到上面 URL + token 的人都能操作这台电脑。</div>`;
+    (s.bridgeInjecting ? field("给 Arena 的端点说明（仅供查看/手工粘贴）", `MCP: ${s.url} | header: Authorization: Bearer ${s.token}`, "mcpLine") : "") +
+    `<div class="hint">${s.bridgeInjecting
+      ? "隧道已发布；持有 URL + token 即持有本地工具权限。命令以本机用户权限运行，用完收回。"
+      : "监听器只绑定 127.0.0.1，可由本机 MCP 客户端使用。尚无公网通道，因此不会向 Arena 注入本地端点。"}</div>`;
   wire(box);
 }
 async function mcpStart() {
   const btn = $("#mcpStart");
-  btn.disabled = true; btn.textContent = "启动中…（约 30 秒）";
+  btn.disabled = true; btn.textContent = "启动中…";
   try {
-    const r = await keyPost("/api/mcp/start");
+    const r = await keyPost("/api/mcp/start", { workspace: $("#mcpRuntimeWorkspace").value.trim() });
     if (r && r.error) toast("启动失败：" + (r.error.message || ""), true);
   } catch (e) { toast("启动失败：" + e.message, true); }
   finally {
@@ -1163,7 +1187,11 @@ async function mcpReinject() {
 }
 
 async function mcpStop() {
-  try { await keyPost("/api/mcp/stop"); toast("已停止并收回"); }
+  try {
+    const r = await keyPost("/api/mcp/stop");
+    if (r && r.error) toast("停止失败：" + (r.error.message || ""), true);
+    else toast("已停止并收回");
+  }
   catch (e) { toast("停止失败：" + e.message, true); }
   await mcpRender();
 }

@@ -201,6 +201,16 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info("boot", "shutting down");
+    try {
+      await server.stopMcp();
+    } catch (error) {
+      // Failed termination keeps a refusal listener bound to the old tunnel
+      // port. Exiting here would release it to another local service while
+      // that tunnel is still alive. Keep the keyed API available for retry.
+      log.error("mcp", "shutdown deferred; retry MCP stop before exiting", { error: error.message });
+      shuttingDown = false;
+      return;
+    }
     clearInterval(refreshTimer);
     server.close();
     await bridge.browser.close().catch(() => undefined);

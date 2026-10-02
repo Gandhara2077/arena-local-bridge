@@ -26,6 +26,15 @@ Until a dedicated security contact is configured, report suspected vulnerabiliti
 - The HTTP service binds to `127.0.0.1` by default and rejects requests whose Host and Origin are not loopback,
   so the API is not reachable from another host by accident.
 - Runtime state, cookies, credentials, `.env` files and tunnel metadata are excluded by `.gitignore`.
+- Optional Local MCP defaults to the self-built Node listener on `127.0.0.1`. It requires an explicitly selected
+  workspace, bearer authentication, and rejects every browser Origin. File tools deny DATA_DIR, allow workspace
+  read/write, and allow configured skill roots read-only. `exec_command` runs with the bridge user's full
+  permissions; pinning its cwd is not a sandbox (ADR 0011).
+- Public transport requires an explicit absolute cloudflared executable path. Endpoint credentials and process
+  records stay inside DATA_DIR, including resolved symlink targets. Publication carries this instance's owner
+  and selected workspace; startup refuses conflicting records and stop revokes only owned records.
+  If child termination fails, the old port remains bound with a refusal handler until exit is confirmed, so a
+  still-running tunnel cannot expose another local service that reuses that port.
 
 ## Data flows
 
@@ -44,4 +53,6 @@ understand their trust model.
 - Treat the Arena account password, cookies, encryption key and bridge bearer key as secrets.
 - Do not commit runtime data or .env files.
 - Review optional proxy/tunnel configuration before enabling it.
+- Treat a public MCP URL and bearer token as local-tool authority. Stop the tunnel after use. AgentDock is an
+  explicitly selected optional legacy integration; the default path requires no third-party closed-source runtime.
 - Remember that model identification traffic reaches trigger.dev.

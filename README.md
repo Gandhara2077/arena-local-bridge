@@ -100,10 +100,27 @@ A stable `x-codex-session-id` keeps one persistent Arena session per client conv
 - **Model identification** — the model name and reasoning tier come from Arena's execution trace, which the
   probe reads back from Trigger.dev using the run token the page itself is given. There is no model API key to
   configure; see [SECURITY.md](SECURITY.md) for that network path.
-- **Local MCP** — optional. When the tunnel is up, the agent is told where to work and can read and write files
-  in your workspace. A turn that fails before Arena receives the message does not spend the one-shot preamble.
+- **Local MCP** — optional, with our self-built Node runtime as the default. All six tools work without
+  AgentDock: read, list, search, edit, execute and publish. An explicitly enabled tunnel lets Arena reach them.
+  A turn that fails before Arena receives the message does not spend the one-shot preamble.
 - **Harvesting and batch testing** — create and drive many sessions at once.
 - **Local operations UI** — sessions, pools, bindings, accounts and quota at a glance.
+
+To start Local MCP, enter an existing absolute workspace in the GUI, or set `ARENA_MCP_WORKSPACE`.
+The listener binds only to `127.0.0.1` (`ARENA_LOCAL_MCP_PORT`, default `8765`). File tools allow that workspace
+and explicit read-only `ARENA_SKILL_ROOTS`; they deny `DATA_DIR` and other directories. `exec_command` runs as
+the bridge's local user: its starting directory is pinned, but it is **not a sandbox**.
+
+Arena runs remotely and cannot reach a loopback URL. Opt in to public transport by setting
+`ARENA_CLOUDFLARED_PATH` to an existing absolute path to the open-source cloudflared executable. It is never
+downloaded automatically. Only a successfully published tunnel is injected into Arena. Treat its URL and token
+as local-tool credentials and stop it after use. Startup errors or tunnel exits revoke this instance's endpoint.
+Repeated starts share the selected workspace; stop before selecting a different one. A conversation naming a
+workspace outside that grant receives HTTP `409`.
+
+AgentDock is an optional legacy compatibility integration: choose `ARENA_MCP_RUNTIME=agentdock` and explicitly
+set `ARENA_AGENTDOCK_DIR` to a directory containing both legacy executables. The default and portable release
+do not need AgentDock, an install-directory search, or any third-party closed-source runtime.
 
 ## Portable release
 
@@ -116,6 +133,7 @@ npm run package:portable -- --node "C:\Program Files\nodejs"
 Unzip `dist/` and double-click **`start-gui.bat`**. This is a Node application, so there is no single-file
 `.exe` and no installer; nothing in the archive downloads anything, and the browser it drives is still the one
 already on your machine.
+The archive includes the self-built Local MCP source; AgentDock and cloudflared are not bundled prerequisites.
 
 ## Documentation
 
