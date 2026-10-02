@@ -52,13 +52,22 @@ const SHIP = [
   "install.sh",
 ];
 
+const missingEntries = SHIP.filter((entry) => !fs.existsSync(path.join(ROOT, entry)));
+if (missingEntries.length) {
+  console.error(`Missing required package entries: ${missingEntries.join(", ")}.`);
+  process.exit(1);
+}
+
 const name = `arena-bridge-portable-${VERSION}-${process.platform}`;
 const stage = path.join(outDir, name);
+if (path.dirname(stage) !== outDir) {
+  console.error(`Invalid staging path: ${stage}. It must be directly inside ${outDir}.`);
+  process.exit(1);
+}
 fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
 for (const entry of SHIP) {
   const from = path.join(ROOT, entry);
-  if (!fs.existsSync(from)) continue;
   fs.cpSync(from, path.join(stage, entry), {
     recursive: true,
     filter: (p) => !/\.(log|tmp)$/i.test(p),
@@ -82,7 +91,8 @@ const shipped = walk(stage);
 // legitimate file look like a browser or hide one (see isBrowserArtifact).
 const banned = shipped.filter((f) => isBrowserArtifact(path.relative(stage, f)));
 if (banned.length) {
-  console.error(`Refusing to ship a browser (ADR 0005): ${banned.slice(0, 5).map((f) => path.relative(stage, f)).join(", ")}`);
+  fs.rmSync(stage, { recursive: true, force: true });
+  console.error(`Refusing to ship a browser (ADR 0005): ${banned.slice(0, 5).map((f) => path.relative(stage, f)).join(", ")}\nStaged tree removed: ${stage}`);
   process.exit(1);
 }
 
@@ -95,7 +105,8 @@ const sizes = shipped.map((f) => ({ f, mb: fs.statSync(f).size / 1024 / 1024 }))
 const stagedMb = sizes.reduce((total, s) => total + s.mb, 0);
 if (stagedMb > LIMIT_MB) {
   const biggest = sizes.sort((a, b) => b.mb - a.mb).slice(0, 5).map((s) => `${s.mb.toFixed(0)} MB  ${path.relative(stage, s.f)}`);
-  console.error(`Refusing to ship ${stagedMb.toFixed(0)} MB unpacked (limit ${LIMIT_MB} MB, ADR 0005). Biggest files:\n  ${biggest.join("\n  ")}`);
+  fs.rmSync(stage, { recursive: true, force: true });
+  console.error(`Refusing to ship ${stagedMb.toFixed(0)} MB unpacked (limit ${LIMIT_MB} MB, ADR 0005). Biggest files:\n  ${biggest.join("\n  ")}\nStaged tree removed: ${stage}`);
   process.exit(1);
 }
 
