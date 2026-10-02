@@ -91,6 +91,17 @@ test("an unreadable store is ignored, not guessed at", () => {
   assert.deepEqual(readStore(dir).records, []);
 });
 
+test("appending refuses corrupt or unsupported stores without overwriting them", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = probeStorePath(dir);
+  for (const original of ["{ not json", '{"version":99,"records":[{"text":"1"}]}', '{"version":1,"records":null}']) {
+    fs.writeFileSync(file, original, "utf8");
+    assert.throws(() => appendRecord(dir, { text: "1 2 3", variant: "v1-instant" }));
+    assert.equal(fs.readFileSync(file, "utf8"), original);
+  }
+});
+
 test("appending a record keeps every earlier one", () => {
   const dir = tmpDir();
   const numbers = Array.from({ length: 200 }, (_, i) => (i % 300) + 1).join(" ");

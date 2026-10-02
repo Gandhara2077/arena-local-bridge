@@ -152,6 +152,7 @@ export const PAGE_PURPOSES = {
   converse: { probe: true },
   harvest: { probe: true },
   reprobe: { probe: true },
+  fingerprint: { probe: true },
   // Loads Google's script and nothing else. No conversation ever runs on it, so
   // the probe would only be re-parsed on every navigation for a snapshot that
   // nobody reads.

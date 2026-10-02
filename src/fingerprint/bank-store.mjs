@@ -12,15 +12,15 @@
  * the same session can be re-probed after the label is established.
  *
  * Storage format is a single JSON file with `{ version, records }`, written
- * atomically. Append-only in spirit: records are never rewritten in place, so
- * a corrupted line costs one record rather than the whole bank.
+ * atomically. An append refuses a corrupt or unsupported store, preserving it
+ * for recovery rather than replacing it with an empty bank.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fitBank } from "./numeric-bank.mjs";
 import { parseNumbers, isUsable } from "./numeric-probe.mjs";
 
-/** Bumped when the record shape changes; a mismatched file is ignored, not guessed at. */
+/** Bumped when the record shape changes; a mismatched file cannot be appended to. */
 const STORE_VERSION = 1;
 
 export function probeStorePath(dataDir) {
@@ -30,14 +30,17 @@ export function probeStorePath(dataDir) {
 /**
  * Read the store. A missing or unreadable file reads as empty rather than
  * throwing: the bank is derived data that can always be recollected, so it must
- * never be the reason startup fails.
+ * never be the reason startup fails. Appends use strict reads to preserve an
+ * existing file when it cannot be read safely.
  */
-export function readStore(dataDir) {
+export function readStore(dataDir, { strict = false } = {}) {
   try {
     const parsed = JSON.parse(fs.readFileSync(probeStorePath(dataDir), "utf8"));
     if (parsed?.version === STORE_VERSION && Array.isArray(parsed.records)) return parsed;
-  } catch {
-    /* absent or corrupt: start clean */
+    if (strict) throw new Error("Unsupported fingerprint store version or record format");
+  } catch (error) {
+    if (strict && error.code !== "ENOENT") throw error;
+    /* missing, or a tolerant read of an invalid store */
   }
   return { version: STORE_VERSION, records: [] };
 }
@@ -50,7 +53,7 @@ export function readStore(dataDir) {
  * that vary something else (account, time of day) can pass their own.
  */
 export function appendRecord(dataDir, { text, model = "", variant, condition = variant, requestedCount, at = new Date().toISOString() }) {
-  const store = readStore(dataDir);
+  const store = readStore(dataDir, { strict: true });
   const numbers = parseNumbers(text);
   const record = {
     text,

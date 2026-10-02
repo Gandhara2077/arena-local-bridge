@@ -5,6 +5,8 @@ import { appendRecord } from "../src/fingerprint/bank-store.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Bridge } from "../src/bridge.mjs";
+import { loadConfig } from "../src/config.mjs";
 
 // A Session's Model may only ever be attributed through its OWN Account. The
 // pool also has a default pick, and the two are routinely different Accounts —
@@ -226,6 +228,54 @@ test("runFingerprintReprobe: the turn runs as the Session's owner, by its own pu
   assert.equal(outcome.status, "attributed");
   assert.equal(outcome.model, "m1");
   assert.deepEqual(seen, [`lease:${OWNER.email}`, `turn:${OWNER.email}:fingerprint`]);
+});
+
+test("runFingerprintReprobe: real converse and getPage can complete a fingerprint turn", async (t) => {
+  const dataDir = seededBankDir();
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const bridge = new Bridge({
+    config: loadConfig({ DATA_DIR: dataDir }, { requireBridgeKey: false }),
+    credentials: fakeCredentials(),
+    recaptcha: null,
+  });
+  // Replace browser I/O, leaving page-purpose validation, leases and converse real.
+  bridge.browser.launch = async () => ({
+    newContext: async () => ({
+      addInitScript: async () => {},
+      addCookies: async () => {},
+      route: async () => {},
+      newPage: async () => ({
+        isClosed: () => false,
+        addInitScript: async () => {},
+        evaluate: async () => "",
+      }),
+    }),
+  });
+  let sentPage;
+  let sentPrompt;
+  bridge.appendAgentMessage = async (page, state, prompt) => {
+    sentPage = page;
+    sentPrompt = prompt;
+  };
+  bridge.readLatestTurn = async (page) => {
+    assert.equal(page, sentPage);
+    return { text: REPLY_FOR(70, 99), nativeCalls: [], turns: [], errorText: "" };
+  };
+  const { outcome, failure } = await runFingerprintReprobe({
+    bridge,
+    sessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    accountEmail: OWNER.email,
+    dataDir,
+    variant: "v1-instant",
+  });
+  assert.equal(failure, null);
+  assert.equal(outcome?.status, "attributed");
+  assert.equal(outcome?.model, "m1");
+  assert.match(sentPrompt, /between 1 and 355/);
+  assert.equal(bridge.browser.leaseCount(OWNER.email), 0);
+  const fingerprintPage = await bridge.browser.getPage(OWNER, "fingerprint");
+  assert.equal(fingerprintPage, sentPage);
+  assert.notEqual(await bridge.browser.getPage(OWNER, "converse"), sentPage);
 });
 
 test("runFingerprintReprobe: a reply matching nothing comes back unresolved with a near miss", async () => {
