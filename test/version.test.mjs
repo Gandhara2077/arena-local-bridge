@@ -14,6 +14,13 @@ test("runtime version equals package.json", () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+$/);
 });
 
+test("the lockfile describes the same release as package.json", () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL("package.json", ROOT), "utf8"));
+  const lock = JSON.parse(fs.readFileSync(new URL("package-lock.json", ROOT), "utf8"));
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[""].version, pkg.version);
+});
+
 test("modules that report the version do not hardcode one", () => {
   for (const file of REPORTERS) {
     const src = fs.readFileSync(new URL(file, ROOT), "utf8");

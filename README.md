@@ -35,14 +35,16 @@ It binds to `127.0.0.1` by default and exposes:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Health check |
+| `GET /health` | Service health and account readiness status |
+| `GET /ready` | Account readiness; HTTP 503 until an account is usable |
 | `GET /v1/models` | Local model list |
 | `POST /v1/chat/completions` | OpenAI-compatible chat |
 | `GET /` | Local operations UI |
 
 ## Requirements
 
-- Node.js **20+**
+- Windows 10/11 **x64** for the portable release (uses the .NET Framework runtime included with Windows)
+- Node.js **20+** for a source installation; the portable release includes Node.js 22
 - An Arena.ai account that you are authorized to use
 - A Chromium-based browser on the host — **Chrome or Edge is enough**. Playwright's own Chromium is only a
   fallback: `npx playwright install chromium`
@@ -50,6 +52,15 @@ It binds to `127.0.0.1` by default and exposes:
 The bridge is for **your own account**. It provides no Arena API key and does not bypass authentication or quotas.
 
 ## Quick start
+
+On Windows, download **`arena-bridge-portable-1.1.0-win32-x64.zip`** from
+[Releases](https://github.com/Gandhara2077/arena-local-bridge/releases), extract it to a writable directory,
+and double-click **`ArenaLocalBridge.exe`**. The launcher starts the bundled Node runtime and opens the local
+GUI after its HTTP health check succeeds. In the GUI's **账号额度** panel on **模型归档 / 连接**, enter your
+Arena email and password, then choose **登录并保存 / Sign in** to complete your first Arena login.
+The GUI can start before an account is signed in; API chat still needs a usable Arena account.
+
+For a source installation:
 
 ~~~bash
 git clone https://github.com/Gandhara2077/arena-local-bridge.git
@@ -130,16 +141,35 @@ do not need AgentDock, an install-directory search, or any third-party closed-so
 
 ## Portable release
 
-For a machine without Node, build a self-contained archive:
+The Windows x64 ZIP includes a lightweight **`ArenaLocalBridge.exe`** launcher, the Node runtime with its
+license at `runtime/LICENSE`, the web GUI and application dependencies. Keep the extracted files together:
+the executable launches this Node application; it is not a single-file bundle or an installer.
+It uses your installed **Edge or Chrome**, bundles no Chromium, and performs no automatic dependency downloads.
+The bridge still connects to Arena when you log in or send a message. Local MCP uses the self-built runtime
+by default; AgentDock and cloudflared remain optional and are not bundled prerequisites.
 
-~~~bash
-npm run package:portable -- --node "C:\Program Files\nodejs"
+Double-clicking the launcher again opens the same installation's GUI. Use **`stop-gui.bat`** or
+`ArenaLocalBridge.exe --stop` to stop that installation. Before upgrading an older release, close the previous
+bridge from its original console or stop its verified process, back up and retain the existing **`.arena-gui`**
+directory, then replace the application files. This directory holds the portable
+installation's configuration and account/session data.
+
+Maintainers: install the source dependencies with `npm ci`, obtain an official **Windows x64 Node.js 22**
+distribution including its `LICENSE`, then build and package on Windows:
+
+~~~powershell
+npm run build:launcher
+npm run package:portable -- --node "C:\release-tools\node-win-x64"
 ~~~
 
-Unzip `dist/` and double-click **`start-gui.bat`**. This is a Node application, so there is no single-file
-`.exe` and no installer; nothing in the archive downloads anything, and the browser it drives is still the one
-already on your machine.
-The archive includes the self-built Local MCP source; AgentDock and cloudflared are not bundled prerequisites.
+`build:launcher` uses Windows' .NET Framework compiler without downloading build tools. The packager defaults
+to `dist/ArenaLocalBridge.exe`; pass `--launcher <exe>` to use a different build. It reads the Node license
+beside the selected runtime, or accepts `--node-license <file>` when that license is elsewhere. Missing required
+assets or the Node license stop packaging before previous outputs are replaced. The output name includes the
+platform and architecture, for example `dist/arena-bridge-portable-1.1.0-win32-x64.zip`.
+
+Release assets include `SHA256SUMS.txt`. Check the downloaded archive with
+`Get-FileHash .\arena-bridge-portable-1.1.0-win32-x64.zip -Algorithm SHA256` and compare its hash with that file.
 
 ## Documentation
 

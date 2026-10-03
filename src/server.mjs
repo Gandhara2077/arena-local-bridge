@@ -326,6 +326,7 @@ export function createServer({ bridge, config }) {
   // Turns currently being driven by the bridge. Manual health checks must not
   // navigate the shared browser page while one is running.
   let turnsInFlight = 0;
+  let accountLoginPending = false;
 
   /**
    * Accounts with their last quota reading attached. The reading is a cached
@@ -395,11 +396,15 @@ export function createServer({ bridge, config }) {
     const clientKey = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "?") + "|" +
       String(req.headers.authorization || "").slice(0, 24);
 
-    // /health stays open: it is the readiness probe used by install.sh and
-    // run.sh, and it exposes no credentials.
+    // /health reports local service liveness even on first run. /ready adds the
+    // independently verified account requirement; neither exposes secrets.
     if (url.pathname === "/health" || url.pathname === "/ready") {
       const payload = bridge.healthPayload();
       payload.accounts = accountsWithQuota();
+      if (url.pathname === "/ready" && !payload.ready) {
+        payload.ok = false;
+        return json(res, 503, payload);
+      }
       return json(res, 200, payload);
     }
 
@@ -470,6 +475,48 @@ export function createServer({ bridge, config }) {
     const auth = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
     if (!config.bridgeKey || auth !== config.bridgeKey) {
       return json(res, 401, { error: { message: "Invalid bridge key" } });
+    }
+
+    // The GUI obtains the local key through /api/status, then submits credentials
+    // only to this authenticated route. ArenaBrowser.login already verifies
+    // usability, and CredentialStore.upsert encrypts both cookie and password.
+    if (req.method === "POST" && url.pathname === "/api/accounts/login") {
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (error) {
+        return json(res, Number(error.status || 400), { error: { message: "Invalid login request body." } });
+      }
+      const email = typeof body?.email === "string" ? body.email.trim() : "";
+      const password = typeof body?.password === "string" ? body.password : "";
+      if (!body || typeof body !== "object" || Array.isArray(body) ||
+          email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !password || password.length > 4096) {
+        return json(res, 400, { error: { message: "A valid email and password are required." } });
+      }
+      try {
+        bridge.credentials.assertWritable();
+      } catch (error) {
+        return json(res, 409, { error: { message: error.message, code: "credentials_unreadable" } });
+      }
+      if (accountLoginPending) {
+        return json(res, 409, { error: { message: "An Arena login is already in progress. Please wait." } });
+      }
+      accountLoginPending = true;
+      try {
+        const result = await bridge.browser.login(email, password);
+        bridge.credentials.upsert({ email: result.email, cookieHeader: result.cookieHeader, password: result.password });
+        bridge.readyAccounts.add(result.email.toLowerCase());
+        return json(res, 200, { ok: true, account: { email: result.email }, accounts: accountsWithQuota() });
+      } catch {
+        // Browser/Arena errors can include request or response content. Do not
+        // reflect or log them on the credential-submission path.
+        log.warn("server", "Arena account login failed");
+        return json(res, 502, {
+          error: { message: "Arena login failed. Check your email, password, and installed browser, then try again." },
+        });
+      } finally {
+        accountLoginPending = false;
+      }
     }
 
     // Local MCP by default, with an explicitly selected legacy compatibility path.

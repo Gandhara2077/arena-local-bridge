@@ -135,3 +135,27 @@ test("the pool survives a reload, including disabled state", () => {
   assert.equal(reopened.primary().email, "b@example.com");
   assert.equal(reopened.list().find((r) => r.email === "a@example.com").disabled, true);
 });
+
+test("a corrupt credential file cannot be replaced by upsert or save", (t) => {
+  for (const original of ["{broken", "[]", '{"version":1,"accounts":{}}']) {
+    const s = store();
+    t.after(() => fs.rmSync(path.dirname(s.filePath), { recursive: true, force: true }));
+    fs.writeFileSync(s.filePath, original);
+    s.load();
+    assert.throws(() => s.upsert({ email: "synthetic@test.local", cookieHeader: "a=1", password: "p" }), /credential.*read/i);
+    assert.throws(() => s.save(), /credential.*read/i);
+    assert.equal(s.primary(), null, "a refused update must not change the in-memory account pool");
+    assert.equal(fs.readFileSync(s.filePath, "utf8"), original);
+  }
+});
+
+test("an unreadable credential path cannot be replaced by a new store", (t) => {
+  const s = store();
+  t.after(() => fs.rmSync(path.dirname(s.filePath), { recursive: true, force: true }));
+  fs.mkdirSync(s.filePath);
+  fs.writeFileSync(path.join(s.filePath, "keep.txt"), "original bytes");
+  s.load();
+  assert.throws(() => s.upsert({ email: "synthetic@test.local", cookieHeader: "a=1", password: "p" }), /credential.*read/i);
+  assert.equal(s.primary(), null);
+  assert.equal(fs.readFileSync(path.join(s.filePath, "keep.txt"), "utf8"), "original bytes");
+});

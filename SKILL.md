@@ -308,18 +308,32 @@ If nothing is found the bridge says where it looked and stops. It never download
 
 ## Portable release
 
-For a machine without a Node install, build a self-contained archive — the app, a Node runtime and the launcher:
+The Windows x64 portable release includes **ArenaLocalBridge.exe**, the Node runtime, the web GUI and its
+dependencies. Extract the entire ZIP to a writable directory, keep its files together, and double-click
+**ArenaLocalBridge.exe**. The executable is a lightweight launcher for the bundled Node application; it waits
+for `/health` before opening the GUI and does not require a separate Node or npm installation.
 
-~~~bash
-npm run package:portable -- --node "C:\Program Files\nodejs"
+For a new account, enter your Arena email and password in the **账号额度** panel on **模型归档 / 连接** and choose
+**登录并保存 / Sign in**. Use `stop-gui.bat` or `ArenaLocalBridge.exe --stop` to stop this installation.
+
+Maintainers: install source dependencies and obtain an official **Windows x64 Node.js 22** distribution with
+its `LICENSE`, then build and package on Windows:
+
+~~~powershell
+npm ci
+npm run build:launcher
+npm run package:portable -- --node "C:\release-tools\node-win-x64"
 ~~~
 
-The archive lands in `dist/` (~106 MB unpacked, ~36 MB zipped; bundling Playwright's Chromium would make it
-350–700 MB, which is why there is none). Unzip it and double-click `start-gui.bat`.
+`build:launcher` uses the Windows .NET Framework compiler without downloading build tools. Packaging defaults
+to `dist/ArenaLocalBridge.exe`; `--launcher <exe>` selects another build. The selected Node runtime's `LICENSE`
+must be beside its executable, or supplied with `--node-license <file>`; the archive includes it at
+`runtime/LICENSE`. Missing required assets stop packaging before previous outputs are replaced.
 
-The archive is a **Windows** artifact today — the platform the release targets, and `start-gui.bat` is the only
-launcher it ships. The bridge itself runs anywhere Node does (`node src/index.mjs`, with `runtime/node` from the
-archive), so a macOS or Linux user can use one, but that is not the packaged path.
+The archive lands in `dist/` with platform and architecture in its filename, for example
+`arena-bridge-portable-1.1.0-win32-x64.zip`. It uses installed Edge or Chrome, bundles no Chromium, and downloads
+no dependencies automatically. Windows 10/11 x64 is the supported portable path; source installations can
+run wherever Node 20+ and a compatible browser are available.
 
 ## Harvesting and batch testing
 

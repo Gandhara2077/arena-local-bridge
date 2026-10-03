@@ -90,6 +90,10 @@ export class Bridge {
     this.credentials = credentials;
     this.recaptcha = recaptcha;
     this.startedAt = startedAt;
+    // Cookies loaded from disk are not proof that Arena will serve the account.
+    // Startup verification and an explicit GUI login confirm readiness in this
+    // process only; the encrypted credential file keeps its existing schema.
+    this.readyAccounts = new Set();
     this.browser = new ArenaBrowser({
       omniRoot: config.omniRoot,
       chromePath: config.chromePath,
@@ -1762,14 +1766,21 @@ export class Bridge {
   }
 
   healthPayload() {
-    const credential = this.credentials.primary();
+    let credential = null;
+    try {
+      credential = this.credentials.primary();
+    } catch {
+      // An unreadable saved cookie affects account readiness, not HTTP liveness.
+    }
     const averageLatencyMs = this.runtime.completed
       ? Math.round(this.runtime.totalLatencyMs / this.runtime.completed)
       : 0;
     return {
       ok: true,
+      ready: Boolean(credential && this.readyAccounts.has(credential.email.toLowerCase())),
       service: "arena-bridge",
       version: VERSION,
+      ...(this.launcherInstance ? { launcherInstance: this.launcherInstance } : {}),
       uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
       mode: "stateless-claude-tools",
       sessions: this.sessions.size,

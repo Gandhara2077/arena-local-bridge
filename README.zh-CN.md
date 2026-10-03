@@ -35,14 +35,16 @@
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /health` | 健康检查 |
+| `GET /health` | 服务健康与账号就绪状态 |
+| `GET /ready` | 账号就绪检查；账号尚不可用时返回 HTTP 503 |
 | `GET /v1/models` | 本地模型列表 |
 | `POST /v1/chat/completions` | OpenAI 兼容聊天接口 |
 | `GET /` | 本地运维界面 |
 
 ## 环境要求
 
-- Node.js **20+**
+- 便携发行支持 Windows 10/11 **x64**（使用 Windows 已包含的 .NET Framework 运行时）
+- 源码安装需要 Node.js **20+**；便携发行已包含 Node.js 22
 - 一个你有权使用的 Arena.ai 账号
 - 主机上有一个 Chromium 内核浏览器 —— **Chrome 或 Edge 就够**；Playwright 自带的 Chromium 只是兜底：
   `npx playwright install chromium`
@@ -50,6 +52,14 @@
 本项目面向你自己的**账号**。它不提供 Arena API Key，也不绕过账号认证或配额。
 
 ## 快速开始
+
+Windows 用户可从[发行页面](https://github.com/Gandhara2077/arena-local-bridge/releases)下载
+**`arena-bridge-portable-1.1.0-win32-x64.zip`**，解压到可写目录，再双击 **`ArenaLocalBridge.exe`**。
+启动器会运行包内的 Node，并在 HTTP 健康检查成功后打开本地 GUI。首次使用时，在 **模型归档 / 连接** 页的
+**账号额度** 面板填写 Arena 邮箱与密码，点击 **登录并保存 / Sign in** 完成登录。
+尚未登录账号也能打开 GUI；API 聊天仍需要可用的 Arena 账号。
+
+源码安装：
 
 ~~~bash
 git clone https://github.com/Gandhara2077/arena-local-bridge.git
@@ -125,15 +135,32 @@ AgentDock 仅保留为可选的遗留兼容集成：显式选择 `ARENA_MCP_RUNT
 
 ## 便携发行
 
-给没有装 Node 的机器打一个自包含压缩包：
+Windows x64 ZIP 包含轻量的 **`ArenaLocalBridge.exe`** 启动器、Node 运行时及其许可证
+`runtime/LICENSE`、网页 GUI 和应用依赖。解压后的文件需要放在一起：exe 用于启动 Node 应用，
+并非单文件应用或安装程序。它使用机器上已安装的 **Edge 或 Chrome**，不捆绑 Chromium，也不自动下载依赖。
+登录账号和发送消息时，Bridge 仍会连接 Arena。本地 MCP 默认使用项目自建运行时，AgentDock 和 cloudflared
+均保持可选，不作为捆绑前提。
 
-~~~bash
-npm run package:portable -- --node "C:\Program Files\nodejs"
+再次双击启动器会打开同一安装目录的 GUI。双击 **`stop-gui.bat`** 或运行 `ArenaLocalBridge.exe --stop`
+可停止这个安装目录的服务。从旧版本升级时，先在旧 Bridge 原来的控制台中关闭服务，或核实进程身份后停止该进程，
+备份并保留原有 **`.arena-gui`** 目录，再替换应用文件；
+该目录保存便携安装的配置与账号、会话数据。
+
+维护者先执行 `npm ci` 安装源码依赖，准备包含 `LICENSE` 的官方 **Windows x64 Node.js 22** 发行包，
+再在 Windows 上编译并打包：
+
+~~~powershell
+npm run build:launcher
+npm run package:portable -- --node "C:\release-tools\node-win-x64"
 ~~~
 
-解压 `dist/` 后双击 **`start-gui.bat`**。这是 Node 应用，所以没有单文件 exe，也没有安装程序；
-包内任何东西都不会联网下载，驱动的仍然是你机器上已有的浏览器。
-发行包包含自建 Local MCP 的源代码；AgentDock 和 cloudflared 都不作为捆绑前提。
+`build:launcher` 使用 Windows 自带的 .NET Framework 编译器，不下载构建工具。打包脚本默认读取
+`dist/ArenaLocalBridge.exe`，也可通过 `--launcher <exe>` 指定其他编译产物。Node 许可证默认从所选运行时
+旁边读取；若存放在别处，可传入 `--node-license <file>`。缺少必需文件或 Node 许可证时，脚本会在替换原有
+输出之前停止。产物名称包含平台与架构，例如 `dist/arena-bridge-portable-1.1.0-win32-x64.zip`。
+
+发行附件包含 `SHA256SUMS.txt`。运行
+`Get-FileHash .\arena-bridge-portable-1.1.0-win32-x64.zip -Algorithm SHA256`，将下载包的哈希与该文件核对。
 
 ## 文档
 
