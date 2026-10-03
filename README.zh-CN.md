@@ -99,7 +99,8 @@ curl -X POST http://127.0.0.1:20140/v1/chat/completions \
   而不是被当作可用账号继续驱动。
 - **模型识别** —— 模型名与推理档位来自 Arena 的执行 trace，探针用页面自己获得的 run token 从 Trigger.dev
   读回。不需要配置任何模型 API Key；这条网络路径见 [SECURITY.md](SECURITY.md)。
-- **本地 MCP** —— 可选。通道启动后，Agent 会被告知工作位置，并能读写你的工作区文件。
+- **本地 MCP** —— 可选功能，默认使用项目自建的 Node 运行时。无需安装 AgentDock，六个工具都能使用：
+  读文件、列目录、搜索、编辑、执行命令和发布文件。显式启用公网隧道后，Arena 才能连接这些工具。
   在消息真正交给 Arena 之前失败的 turn 不会消耗一次性前言。
   手动重注入没认出工作区时，可在界面里选择最近的 Codex 工作区并确认；Bridge 不会替你挑候选。
   这次选择仅用于下一轮消息真正交给 Arena 的请求，发送失败时保留；该轮显式的 `x-arena-workspace` 头优先。
@@ -108,6 +109,19 @@ curl -X POST http://127.0.0.1:20140/v1/chat/completions \
   返回空数组，界面保留原有的恢复提示。
 - **采集与批量测试** —— 批量创建与驱动 Session。
 - **本地运维界面** —— Session、模型池、绑定、账号与额度一目了然。
+
+启动本地 MCP 时，在 GUI 填写已有工作区的绝对目录，或设置 `ARENA_MCP_WORKSPACE`。
+监听器只绑定 `127.0.0.1`（`ARENA_LOCAL_MCP_PORT`，默认 `8765`）。文件工具只允许该工作区和显式配置的
+`ARENA_SKILL_ROOTS` 只读目录；`DATA_DIR` 与其他目录保持不可读写。`exec_command` 以 Bridge 的本机用户权限运行，
+只约束命令的起始目录，**不是沙箱**。
+
+Arena 在远端，无法访问本机回环 URL。如需公网连接，显式将 `ARENA_CLOUDFLARED_PATH` 设置为已有开源 cloudflared
+可执行文件的绝对路径；程序不会自动下载它。只有隧道成功发布后才会把端点注入 Arena。URL 和 token 都是本地工具凭据，
+用完点「停止并收回」。启动失败或隧道退出会撤销本实例端点。重复启动复用所选工作区；切换工作区前先停止。
+对话识别出的目录超出授权工作区时，接口返回 HTTP `409`。
+
+AgentDock 仅保留为可选的遗留兼容集成：显式选择 `ARENA_MCP_RUNTIME=agentdock`，并将 `ARENA_AGENTDOCK_DIR`
+指向同时包含两个旧版可执行文件的目录。默认路径与便携发行无需安装 AgentDock、搜索安装目录或依赖第三方闭源运行时。
 
 ## 便携发行
 
@@ -119,6 +133,7 @@ npm run package:portable -- --node "C:\Program Files\nodejs"
 
 解压 `dist/` 后双击 **`start-gui.bat`**。这是 Node 应用，所以没有单文件 exe，也没有安装程序；
 包内任何东西都不会联网下载，驱动的仍然是你机器上已有的浏览器。
+发行包包含自建 Local MCP 的源代码；AgentDock 和 cloudflared 都不作为捆绑前提。
 
 ## 文档
 

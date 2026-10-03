@@ -17,6 +17,7 @@ import {
 import { log, retry, maskTunnelUrl } from "./util.mjs";
 import { injectionPlan, mcpPreamble, WORKSPACE_HEADER, workspaceFromHeaders } from "./mcp-preamble.mjs";
 import { resolveWorkspace } from "./codex-workspace.mjs";
+import { decidePath } from "./path-guard.mjs";
 import { readSnapshot } from "./probe/index.mjs";
 import { VERSION } from "./version.mjs";
 
@@ -116,7 +117,7 @@ export class Bridge {
     };
     this.operationQueue = Promise.resolve();
     this.lastDumps = {};
-    // §4.25 — auto-inject the local AgentDock MCP endpoint into a session the
+    // Auto-inject the explicitly published local MCP endpoint into a session the
     // first time we talk to it (and again whenever the endpoint changes).
     this.mcpInjected = this.#loadMcpInjected();
     // Ticket 14 — sessions whose next turn must be told again, even though the
@@ -168,8 +169,8 @@ export class Bridge {
   }
 
   /**
-   * The endpoint file as it stands NOW: written by start-arena-mcp.ps1, deleted
-   * by stop-arena-mcp.ps1. null while no tunnel is up.
+   * The public endpoint as it stands NOW: owned publication for Local MCP, or
+   * the compatible old format in legacy mode. null while no usable tunnel is up.
    */
   #currentEndpoint() {
     if (!this.config.mcpEndpointFile) return null;
@@ -182,11 +183,40 @@ export class Bridge {
     const url = String(endpoint?.url || "").trim();
     const token = String(endpoint?.token || "").trim();
     if (!url || !token) return null;
+    if (this.config.mcpRuntime === "local") {
+      if (endpoint.runtime !== "local" || !this.config.mcpOwner || endpoint.owner !== this.config.mcpOwner || !path.isAbsolute(endpoint.workspace || "")) return null;
+      try {
+        const publicUrl = new URL(url);
+        if (publicUrl.protocol !== "https:" || !publicUrl.hostname.endsWith(".trycloudflare.com")) return null;
+      } catch { return null; }
+    }
     // Hash the WHOLE token: a fingerprint over its first 8 characters would
     // call a rotated token "the same endpoint" and skip the re-injection the
     // new tunnel needs. The hash is stored, never the token itself.
     const digest = crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
-    return { url, token, fingerprint: `${url}|${digest}` };
+    return { url, token, workspace: endpoint.runtime === "local" ? endpoint.workspace : "", fingerprint: `${url}|${digest}${endpoint.runtime === "local" ? `|${endpoint.workspace}` : ""}` };
+  }
+
+  #endpointWorkspace(endpoint, sessionId, headers) {
+    const outcome = resolveWorkspace({
+      headers: this.#workspaceHeaders(sessionId, headers),
+      sessionsRoot: this.config.codexSessionsDir,
+      windowMs: this.config.codexRecentWindowMs,
+      // The GUI's explicit startup body can override the configured startup
+      // default. The actual grant, recorded by this runtime, is authoritative
+      // when no caller/Codex hint identifies a more specific conversation.
+      fallback: endpoint?.workspace || this.config.mcpWorkspace,
+    });
+    if (endpoint?.workspace && this.config.mcpRuntime === "local") {
+      const decision = decidePath({
+        path: outcome.workspace, intent: "exec", workspaceRoots: [endpoint.workspace], privateRoots: [this.config.dataDir],
+      }, { resolve: (p) => fs.realpathSync.native(p) });
+      if (!decision.allowed) throw Object.assign(new Error("This conversation's workspace is outside the running Local MCP workspace; stop MCP before switching workspaces"), {
+        status: 409, code: "mcp_workspace_conflict",
+      });
+      if (outcome.source === "config") outcome.source = "local-runtime";
+    }
+    return outcome;
   }
 
   /**
@@ -229,6 +259,13 @@ export class Bridge {
     const endpoint = this.#currentEndpoint();
     const pendingRequest = this.mcpReinjectPending.get(sessionId);
     const pending = !!pendingRequest;
+    const workspaceHeaders = this.#workspaceHeaders(sessionId, headers);
+    if (!workspaceFromHeaders(workspaceHeaders)) {
+      workspaceHeaders[WORKSPACE_HEADER] = pendingRequest?.workspace || "";
+    }
+    // Check a recognized caller workspace even when this Session has already
+    // spent its injection: an old preamble must not authorize another project.
+    const resolved = endpoint ? this.#endpointWorkspace(endpoint, sessionId, workspaceHeaders) : null;
     const plan = injectionPlan({
       injected: this.mcpInjected.get(sessionId) || "",
       endpoint: endpoint?.fingerprint || "",
@@ -237,16 +274,7 @@ export class Bridge {
     if (!plan.inject) {
       return { injected: false, pending, reason: plan.reason, workspace: "", workspaceFrom: "none", preamble: "" };
     }
-    const workspaceHeaders = this.#workspaceHeaders(sessionId, headers);
-    if (!workspaceFromHeaders(workspaceHeaders)) {
-      workspaceHeaders[WORKSPACE_HEADER] = pendingRequest?.workspace || "";
-    }
-    const { workspace, source } = resolveWorkspace({
-      headers: workspaceHeaders,
-      sessionsRoot: this.config.codexSessionsDir,
-      windowMs: this.config.codexRecentWindowMs,
-      fallback: this.config.mcpWorkspace,
-    });
+    const { workspace, source } = resolved;
     return {
       injected: true,
       pending,
@@ -309,12 +337,7 @@ export class Bridge {
     if (!plan.inject) {
       return { injected: false, pending: false, reason: plan.reason, workspace: "", workspaceFrom: "none" };
     }
-    const { workspace, source } = resolveWorkspace({
-      headers: this.#workspaceHeaders(sessionId, headers),
-      sessionsRoot: this.config.codexSessionsDir,
-      windowMs: this.config.codexRecentWindowMs,
-      fallback: this.config.mcpWorkspace,
-    });
+    const { workspace, source } = this.#endpointWorkspace(endpoint, sessionId, headers);
     // A manual request exists to RECOVER the workspace; arming a turn that
     // still has none would look fixed while nothing changed, and the file
     // tools would stay unusable. Say why instead.

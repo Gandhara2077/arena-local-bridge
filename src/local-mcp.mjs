@@ -181,7 +181,7 @@ function readWholeFile(file, maxBytes) {
 // decides which directories to enter (search skips node_modules/.git;
 // list_dir with entry_type=file stays flat — a directory is not a file, so we
 // do not enter it looking for one).
-function* walkTree(root, { maxDepth = Infinity, descend = null } = {}) {
+function* walkTree(root, ctx, { maxDepth = Infinity, descend = null } = {}) {
   let names;
   try {
     names = fs.readdirSync(root, { withFileTypes: true });
@@ -190,9 +190,13 @@ function* walkTree(root, { maxDepth = Infinity, descend = null } = {}) {
   }
   for (const entry of names) {
     const full = path.join(root, entry.name);
+    try { guard(ctx, full, "read"); } catch (error) {
+      if (error.denied) continue;
+      throw error;
+    }
     yield { entry, full };
     if (entry.isDirectory() && maxDepth > 1 && (!descend || descend(entry))) {
-      yield* walkTree(full, { maxDepth: maxDepth - 1, descend });
+      yield* walkTree(full, ctx, { maxDepth: maxDepth - 1, descend });
     }
   }
 }
@@ -215,7 +219,7 @@ function toolListDir(args, ctx) {
   guard(ctx, args.path, "read");
   const filter = args.entry_type || "any";
   const out = [];
-  for (const { entry, full } of walkTree(args.path, {
+  for (const { entry, full } of walkTree(args.path, ctx, {
     maxDepth: clamp(args.max_depth, 1, 20),
     descend: filter === "file" ? () => false : null,
   })) {
@@ -255,7 +259,7 @@ function toolSearchText(args, ctx) {
   const matches = [];
   let scanned = 0;
   let scannedBytes = 0;
-  for (const { entry, full } of walkTree(start, { descend: (dir) => !SEARCH_SKIP_DIRS.has(dir.name) })) {
+  for (const { entry, full } of walkTree(start, ctx, { descend: (dir) => !SEARCH_SKIP_DIRS.has(dir.name) })) {
     if (matches.length >= maxResults || scanned >= SEARCH_MAX_FILES || scannedBytes >= SEARCH_MAX_TOTAL_BYTES) break;
     if (!entry.isFile()) continue;
     let stat;

@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./util.mjs";
 import { AgentDockManager } from "./agentdock.mjs";
+import { LocalMcpRuntime } from "./local-mcp-runtime.mjs";
 import { stats as archiveStats, readEntries, removeEntries, sessionAccountEmail, sessionIdFromUrl, updateModel } from "./archive.mjs";
 import { Harvester } from "./harvest.mjs";
 import { BatchTest } from "./batchtest.mjs";
@@ -310,12 +311,13 @@ export function isSessionId(model) {
 export function createServer({ bridge, config }) {
   const limiter = new RateLimiter(config.rateLimitRpm);
   const startedAt = Date.now();
-  // §4.26 — GUI one-click control of the local AgentDock MCP server + tunnel.
-  const agentdock = new AgentDockManager({
+  config.mcpRuntime ||= "local";
+  const mcp = config.mcpRuntime === "agentdock" ? new AgentDockManager({
     dir: config.agentdockDir,
     dataDir: config.dataDir,
     endpointFile: config.mcpEndpointFile,
-  });
+  }) : new LocalMcpRuntime(config);
+  config.mcpOwner = "";
   // The session currently selected in the GUI as the "active" model provider.
   // Clients may use model: "active" (or omit model) to target it.
   let activeSession = String(config.arenaSessions || "").split(",").map((s) => s.trim()).filter(Boolean)[0] || "";
@@ -470,9 +472,9 @@ export function createServer({ bridge, config }) {
       return json(res, 401, { error: { message: "Invalid bridge key" } });
     }
 
-    // §4.26 — one-click local MCP bridge (AgentDock + cloudflared tunnel).
+    // Local MCP by default, with an explicitly selected legacy compatibility path.
     if (url.pathname === "/api/mcp/status") {
-      return json(res, 200, await agentdock.status());
+      return json(res, 200, await mcp.status());
     }
     if (req.method === "GET" && url.pathname === "/api/mcp/workspaces") {
       return json(res, 200, listRecentCodexWorkspaces({ sessionsRoot: config.codexSessionsDir }));
@@ -507,7 +509,7 @@ export function createServer({ bridge, config }) {
               `HTTP 客户端可以直接带 ${WORKSPACE_HEADER} 头。`;
         return json(res, 200, { sessionId, ...outcome, hint });
       } catch (error) {
-        return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+        return json(res, Number(error.status || 500), { error: { message: error instanceof Error ? error.message : String(error), code: error.code } });
       }
     }
 
@@ -811,7 +813,7 @@ export function createServer({ bridge, config }) {
     }
     if (req.method === "POST" && url.pathname === "/api/mcp/start") {
       try {
-        return json(res, 200, await agentdock.start());
+        return json(res, 200, await mcp.start((await readBody(req)) || {}));
       } catch (error) {
         return json(res, Number(error.status || 500), {
           error: { message: error instanceof Error ? error.message : String(error), code: error.code || "mcp_start_failed" },
@@ -820,7 +822,7 @@ export function createServer({ bridge, config }) {
     }
     if (req.method === "POST" && url.pathname === "/api/mcp/stop") {
       try {
-        return json(res, 200, await agentdock.stop());
+        return json(res, 200, await mcp.stop());
       } catch (error) {
         return json(res, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
       }
@@ -1161,6 +1163,14 @@ export function createServer({ bridge, config }) {
   server.headersTimeout = 66_000;
   server.maxHeadersCount = 128;
   server.startTime = startedAt;
+  // Legacy mode may be reading an endpoint started outside this HTTP server.
+  // Its old explicit stop contract stays intact; automatic shutdown must not
+  // call that sweep unless this manager actually owns live children.
+  server.stopMcp = () => config.mcpRuntime === "local" ? mcp.shutdown()
+    : mcp.tunnel || mcp.service ? mcp.stop() : Promise.resolve();
+  server.once("close", () => {
+    void server.stopMcp().catch((error) => log.error("mcp", "shutdown failed", { error: error.message }));
+  });
 
   return server;
 }

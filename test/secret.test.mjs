@@ -52,9 +52,11 @@ test("writeSecretFile: leaves no temporary file, and never adopts the old fixed 
 test("writeSecretFile: 收紧到 0600 —— 仅 POSIX 验证，Windows 上不验证", {
   skip: process.platform === "win32" && "Windows 不实现 POSIX 权限位，本平台无法验证这一条",
 }, () => {
-  const file = path.join(tempDir("arena-secret-"), "auth-token.txt");
-  writeSecretFile(file, "0123456789abcdef");
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  for (const overwrite of [true, false]) {
+    const file = path.join(tempDir("arena-secret-"), "auth-token.txt");
+    writeSecretFile(file, "0123456789abcdef", { overwrite });
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  }
 });
 
 // ── Windows ─────────────────────────────────────────────────────────────────
@@ -279,15 +281,12 @@ test("writeSecretFile: a secret that could not be made owner-only is not written
 test("writeSecretFile: on Windows the ACL really is owner-only", {
   skip: process.platform !== "win32" && "Windows 之外的平台走 POSIX 权限位，见上面那条",
 }, () => {
-  const file = path.join(tempDir("arena-secret-"), "auth-token.txt");
-  writeSecretFile(file, "0123456789abcdef");
-  const stdout = execFileSync("icacls", [file], {
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  const aces = parseIcalsAces(stdout, file);
-  assert.equal(aces.length, 1, `expected one entry, got ${JSON.stringify(aces)}`);
-  assert.match(aces[0].identity, new RegExp(`(^|\\\\)${os.userInfo().username}$`, "i"));
-  assert.equal(aces[0].rights, "(F)");
+  for (const overwrite of [true, false]) {
+    const file = path.join(tempDir("arena-secret-"), "auth-token.txt");
+    writeSecretFile(file, "0123456789abcdef", { overwrite });
+    const aces = parseIcalsAces(readAcl(file), file);
+    assert.equal(aces.length, 1, `expected one entry, got ${JSON.stringify(aces)}`);
+    assert.match(aces[0].identity, new RegExp(`(^|\\\\)${os.userInfo().username}$`, "i"));
+    assert.equal(aces[0].rights, "(F)");
+  }
 });

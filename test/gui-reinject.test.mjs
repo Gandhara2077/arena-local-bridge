@@ -57,6 +57,7 @@ async function openGui({ outcome = REFUSAL, candidates = [] } = {}) {
           ? { sessionId: body.sessionId || activeSession, pending: true, injected: false, workspace: body.workspace }
           : outcome;
       } else if (route === "/api/mcp/workspaces") data = candidates;
+      else if (route === "/api/mcp/status") data = { runtime: "local", installed: true, running: true, bridgeInjecting: true, url: "https://gui-test.trycloudflare.com/mcp", token: "gui-test-token" };
       else if (route === "/api/status") data = { apiKey: "gui-test-key", activeSession, origin: "http://127.0.0.1:20140", accounts: [] };
       else if (route === "/api/sessions") data = { sessions: [], groups: [] };
       else if (route === "/api/pool/bindings") data = { bindings: [] };
