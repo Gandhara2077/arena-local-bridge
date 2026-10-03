@@ -169,6 +169,79 @@ describe("manual re-injection", () => {
     assert.equal(outcome.workspaceFrom, "config");
   });
 
+  test("two recent transcripts still refuse guessing, but the user's selection reaches the next turn", async () => {
+    const bridge = makeBridge();
+    const sessionsRoot = path.join(bridge.config.dataDir, "codex-sessions");
+    fs.mkdirSync(sessionsRoot);
+    for (const [id, cwd] of [[CODEX_A, "/projects/A"], [CODEX_B, "/projects/B"]]) {
+      fs.writeFileSync(path.join(sessionsRoot, `rollout-${id}.jsonl`), JSON.stringify({ cwd }));
+    }
+    bridge.config.codexSessionsDir = sessionsRoot;
+    bridge.config.codexRecentWindowMs = 120_000;
+    writeEndpoint(bridge, URL_A, "token-a");
+
+    const refused = bridge.reinjectLocalCapability(SESSION, {});
+    assert.equal(refused.pending, false);
+    assert.equal(refused.reason, "no workspace recognized");
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false);
+    const armed = bridge.reinjectLocalCapability(SESSION, { [WORKSPACE_HEADER]: "/projects/B" });
+    assert.equal(armed.workspace, "/projects/B");
+    assert.equal(armed.pending, true);
+
+    await turn(bridge, "hello", {});
+    assert.match(bridge.sent[0], /本地工作区: \/projects\/B/);
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false);
+    assert.equal(bridge.codexSessionBySession.size, 0, "a picker choice is not a Codex session binding");
+    assert.equal(bridge.reinjectLocalCapability(SESSION, {}).pending, false, "the selected path was one-shot");
+  });
+
+  test("an explicit turn workspace overrides the pending picker choice", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    bridge.reinjectLocalCapability(SESSION, { [WORKSPACE_HEADER]: "/projects/selected" });
+    await turn(bridge, "hello", { [WORKSPACE_HEADER]: "/projects/current" });
+    assert.match(bridge.sent[0], /本地工作区: \/projects\/current/);
+    assert.ok(!bridge.sent[0].includes("/projects/selected"));
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false);
+  });
+
+  test("a re-injection without an explicit workspace still resolves the directory at the turn", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    bridge.config.mcpWorkspace = "/projects/old-default";
+    assert.equal(bridge.reinjectLocalCapability(SESSION, {}).pending, true);
+    bridge.config.mcpWorkspace = "/projects/new-default";
+    await turn(bridge, "hello", {});
+    assert.match(bridge.sent[0], /本地工作区: \/projects\/new-default/);
+  });
+
+  test("re-arming a picker choice during a send preserves it for the following turn", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    bridge.reinjectLocalCapability(SESSION, { [WORKSPACE_HEADER]: "/projects/A" });
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let reached;
+    const inside = new Promise((resolve) => { reached = resolve; });
+    const append = bridge.appendAgentMessage;
+    bridge.appendAgentMessage = async (...args) => {
+      await append(...args);
+      reached();
+      await gate;
+    };
+    const running = turn(bridge, "first", {});
+    await inside;
+    bridge.reinjectLocalCapability(SESSION, { [WORKSPACE_HEADER]: "/projects/B" });
+    release();
+    await running;
+    assert.match(bridge.sent[0], /本地工作区: \/projects\/A/);
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), true, "sending A must not consume a later choice of B");
+    bridge.appendAgentMessage = append;
+    await turn(bridge, "second", {});
+    assert.match(bridge.sent[1], /本地工作区: \/projects\/B/);
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false);
+  });
+
   test("a new tunnel re-injects on its own (old line is dead)", () => {
     const bridge = makeBridge();
     writeEndpoint(bridge, URL_A, "token-a");
@@ -362,6 +435,22 @@ describe("when a turn spends the injection", () => {
     assert.equal(bridge.sent.length, 2);
     assert.match(bridge.sent[1], /endpoint: https:\/\/tunnel-a/);
     assert.equal(bridge.mcpReinjectPending.has(SESSION), false, "spent by the turn that really went out");
+  });
+
+  test("a picker choice survives a failed send and is consumed by the next successful send", async () => {
+    const bridge = makeBridge();
+    writeEndpoint(bridge, URL_A, "token-a");
+    bridge.reinjectLocalCapability(SESSION, { [WORKSPACE_HEADER]: "/projects/selected" });
+    const append = bridge.appendAgentMessage;
+    bridge.appendAgentMessage = async () => { throw new Error("Send button not found"); };
+    await assert.rejects(turn(bridge, "hello", {}), /Send button not found/);
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), true);
+    assert.equal(bridge.sent.length, 0);
+
+    bridge.appendAgentMessage = append;
+    await turn(bridge, "try again", {});
+    assert.match(bridge.sent[0], /本地工作区: \/projects\/selected/);
+    assert.equal(bridge.mcpReinjectPending.has(SESSION), false);
   });
 
   test("a turn that dies after Arena got the prompt keeps it spent, so it is never delivered twice", async () => {

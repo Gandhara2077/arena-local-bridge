@@ -8,6 +8,7 @@ import {
   matchRolloutNames,
   resolveCodexWorkspace,
   resolveRecentCodexWorkspace,
+  resolveWorkspace,
   soleRecentTranscript,
 } from "../src/codex-workspace.mjs";
 
@@ -111,4 +112,14 @@ test("a transcript with no cwd yields nothing rather than a wrong path", () => {
   const sessions = root();
   writeRollout(sessions, "2026/09/20", `rollout-2026-09-20T12-55-36-${SID}.jsonl`, '{"ordinal":0}');
   assert.equal(resolveCodexWorkspace({ sessionsRoot: sessions, sessionId: SID }), "");
+});
+
+test("relative transcript and configured paths never become workspaces", () => {
+  const sessions = root();
+  writeRollout(sessions, "nested", `rollout-${SID}.jsonl`, '{"cwd":"../wrong-project"}');
+  assert.equal(resolveCodexWorkspace({ sessionsRoot: sessions, sessionId: SID }), "");
+  assert.equal(resolveRecentCodexWorkspace({ sessionsRoot: sessions }), "");
+  assert.deepEqual(resolveWorkspace({ sessionsRoot: sessions, fallback: "relative-project" }), {
+    workspace: "", source: "none",
+  });
 });

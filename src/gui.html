@@ -470,6 +470,15 @@
               重注入给当前会话
             </button>
           </div>
+          <div id="mcpWorkspacePicker" hidden style="margin-top:10px">
+            <div class="form-row">
+              <label><span>最近的 Codex 工作区</span><select id="mcpWorkspace"></select></label>
+            </div>
+            <div class="row" style="margin-bottom:0">
+              <button class="btn-primary" id="mcpWorkspaceConfirm" disabled>确认并重注入</button>
+              <button class="btn-ghost" id="mcpWorkspaceCancel">取消</button>
+            </div>
+          </div>
         </section>
 
         <section class="panel">
@@ -1164,16 +1173,35 @@ async function mcpStart() {
 }
 // Ticket 14 — Session was created before we knew its workspace (or the
 // workspace changed): re-resolve and inject once more into the ACTIVE session.
-async function mcpReinject() {
+async function mcpReinject(body = {}) {
+  const picker = $("#mcpWorkspacePicker");
+  picker.hidden = true;
+  $("#mcpReinject").disabled = true;
+  $("#mcpWorkspaceConfirm").disabled = true;
   try {
-    const r = await keyPost("/api/mcp/reinject", {});
+    const r = await keyPost("/api/mcp/reinject", body);
     if (r && r.error) return toast("重注入失败：" + (r.error.message || ""), true);
+    if (!r.pending && !r.injected && r.reason === "no workspace recognized") {
+      const candidates = await mcpApi("/api/mcp/workspaces").catch(() => []);
+      if (Array.isArray(candidates) && candidates.length) {
+        const select = $("#mcpWorkspace");
+        select.replaceChildren(new Option("请先选择工作区", ""),
+          ...candidates.map((c) => new Option(c.workspace, c.workspace)));
+        picker.dataset.sessionId = r.sessionId;
+        picker.hidden = false;
+        select.focus();
+        return toast("没认出工作区：请在下方选择目标项目，确认后安排重注入。", true);
+      }
+    }
     // Nothing is sent to Arena by this button: it arms the NEXT turn, which is
     // the only thing that actually carries the preamble to the model.
     toast(r && r.pending ? "已安排：下一次请求会把本地能力重新注入（工作区：" + (r.workspace || "?") + "）"
       : "本地能力未启用 — " + (r && r.hint ? r.hint : r.reason), !r.pending);
   } catch (e) { toast("重注入失败：" + e.message, true); }
-  await mcpRender();
+  finally {
+    $("#mcpReinject").disabled = false;
+    await mcpRender();
+  }
 }
 
 async function mcpStop() {
@@ -1308,7 +1336,19 @@ function selectAll(on) {
 $("#mcpRefresh").addEventListener("click", mcpRender);
 $("#mcpStart").addEventListener("click", mcpStart);
 $("#mcpStop").addEventListener("click", mcpStop);
-$("#mcpReinject").addEventListener("click", mcpReinject);
+$("#mcpReinject").addEventListener("click", () => mcpReinject());
+$("#mcpWorkspace").addEventListener("change", () => {
+  $("#mcpWorkspaceConfirm").disabled = !$("#mcpWorkspace").value;
+});
+$("#mcpWorkspaceConfirm").addEventListener("click", () => {
+  const picker = $("#mcpWorkspacePicker");
+  const workspace = $("#mcpWorkspace").value;
+  if (!picker.hidden && workspace) return mcpReinject({ sessionId: picker.dataset.sessionId, workspace });
+});
+$("#mcpWorkspaceCancel").addEventListener("click", () => {
+  $("#mcpWorkspacePicker").hidden = true;
+  $("#mcpWorkspaceConfirm").disabled = true;
+});
 $("#refresh").addEventListener("click", render);
 $("#hvStart").addEventListener("click", hvStart);
 $("#hvStop").addEventListener("click", hvStop);

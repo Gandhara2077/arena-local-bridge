@@ -15,7 +15,7 @@ import {
   repeatedToolGuard,
 } from "./parser.mjs";
 import { log, retry, maskTunnelUrl } from "./util.mjs";
-import { injectionPlan, mcpPreamble } from "./mcp-preamble.mjs";
+import { injectionPlan, mcpPreamble, WORKSPACE_HEADER, workspaceFromHeaders } from "./mcp-preamble.mjs";
 import { resolveWorkspace } from "./codex-workspace.mjs";
 import { readSnapshot } from "./probe/index.mjs";
 import { VERSION } from "./version.mjs";
@@ -123,7 +123,8 @@ export class Bridge {
     // automatic injection already fired. Armed by /api/mcp/reinject, spent by
     // the first real turn that follows — see localCapabilityForTurn (which
     // decides) and commitLocalCapability (which spends).
-    this.mcpReinjectPending = new Set();
+    // An explicit user choice travels with that one-shot arming, not a binding.
+    this.mcpReinjectPending = new Map();
     // Which Codex conversation drives each Arena session, remembered from the
     // turns that came with the header. A manual re-injection has no request to
     // read it from (see #workspaceHeaders).
@@ -226,7 +227,8 @@ export class Bridge {
    */
   localCapabilityForTurn(sessionId, headers = null) {
     const endpoint = this.#currentEndpoint();
-    const pending = this.mcpReinjectPending.has(sessionId);
+    const pendingRequest = this.mcpReinjectPending.get(sessionId);
+    const pending = !!pendingRequest;
     const plan = injectionPlan({
       injected: this.mcpInjected.get(sessionId) || "",
       endpoint: endpoint?.fingerprint || "",
@@ -235,8 +237,12 @@ export class Bridge {
     if (!plan.inject) {
       return { injected: false, pending, reason: plan.reason, workspace: "", workspaceFrom: "none", preamble: "" };
     }
+    const workspaceHeaders = this.#workspaceHeaders(sessionId, headers);
+    if (!workspaceFromHeaders(workspaceHeaders)) {
+      workspaceHeaders[WORKSPACE_HEADER] = pendingRequest?.workspace || "";
+    }
     const { workspace, source } = resolveWorkspace({
-      headers: this.#workspaceHeaders(sessionId, headers),
+      headers: workspaceHeaders,
       sessionsRoot: this.config.codexSessionsDir,
       windowMs: this.config.codexRecentWindowMs,
       fallback: this.config.mcpWorkspace,
@@ -252,6 +258,7 @@ export class Bridge {
       // endpoint file may already describe a different tunnel, and the ledger
       // has to record what this turn actually said.
       sessionId,
+      pendingRequest,
       fingerprint: endpoint.fingerprint,
       endpointUrl: endpoint.url,
     };
@@ -268,7 +275,9 @@ export class Bridge {
     if (!decision?.injected) return;
     this.mcpInjected.set(decision.sessionId, decision.fingerprint);
     this.#saveMcpInjected();
-    if (decision.pending) this.mcpReinjectPending.delete(decision.sessionId);
+    if (decision.pending && this.mcpReinjectPending.get(decision.sessionId) === decision.pendingRequest) {
+      this.mcpReinjectPending.delete(decision.sessionId);
+    }
     const what = decision.pending
       ? "local capability re-injected (armed by request)"
       : "converse: injecting local MCP endpoint into session";
@@ -317,7 +326,7 @@ export class Bridge {
       });
       return { injected: false, pending: false, reason: "no workspace recognized", workspace: "", workspaceFrom: source };
     }
-    this.mcpReinjectPending.add(sessionId);
+    this.mcpReinjectPending.set(sessionId, { workspace: source === "request-header" ? workspace : "" });
     log.info("bridge", "local capability re-injection armed for the next turn", {
       sessionId,
       workspace,

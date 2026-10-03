@@ -6,7 +6,7 @@
 // behavior, never model intelligence.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import path from "node:path";
 import { VERSION } from "../../src/version.mjs";
 import { startE2E, httpRequest, authHeaders, waitFor, BRIDGE_KEY, SESSION_ID } from "./helper.mjs";
@@ -352,6 +352,56 @@ describe("operator endpoints over real HTTP", () => {
   });
 });
 
+describe("GET /api/mcp/workspaces — recent candidates, never an automatic choice", () => {
+  test("returns the newest ten distinct absolute paths and timestamps, without transcript metadata", async (t) => {
+    const ctx = await startE2E();
+    t.after(() => ctx.close());
+    const sessionsRoot = path.join(ctx.config.dataDir, "codex-sessions");
+    ctx.config.codexSessionsDir = sessionsRoot;
+    mkdirSync(path.join(sessionsRoot, "nested"), { recursive: true });
+    const fixtures = [
+      ["/projects/newest", 12], ["D:\\projects\\one", 11], ["/projects/newest", 10],
+      ["/projects/two", 9], ["/projects/three", 8], ["/projects/four", 7],
+      ["/projects/five", 6], ["/projects/six", 5], ["/projects/seven", 4],
+      ["/projects/eight", 3], ["/projects/nine", 2], ["/projects/ten", 1],
+      ["/projects/eleven", 0], ["relative/project", 13], ["", 14],
+    ];
+    for (const [index, [cwd, second]] of fixtures.entries()) {
+      const file = path.join(sessionsRoot, "nested", `private-session-${index}.jsonl`);
+      writeFileSync(file, JSON.stringify({ cwd, message: "private transcript content" }));
+      const stamp = new Date(Date.UTC(2026, 8, 30, 0, 0, second));
+      utimesSync(file, stamp, stamp);
+    }
+    const res = await httpRequest(ctx.port, { reqPath: "/api/mcp/workspaces", headers: authHeaders() });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, [
+      { workspace: "/projects/newest", lastWriteAt: "2026-09-30T00:00:12.000Z" },
+      { workspace: "D:\\projects\\one", lastWriteAt: "2026-09-30T00:00:11.000Z" },
+      { workspace: "/projects/two", lastWriteAt: "2026-09-30T00:00:09.000Z" },
+      { workspace: "/projects/three", lastWriteAt: "2026-09-30T00:00:08.000Z" },
+      { workspace: "/projects/four", lastWriteAt: "2026-09-30T00:00:07.000Z" },
+      { workspace: "/projects/five", lastWriteAt: "2026-09-30T00:00:06.000Z" },
+      { workspace: "/projects/six", lastWriteAt: "2026-09-30T00:00:05.000Z" },
+      { workspace: "/projects/seven", lastWriteAt: "2026-09-30T00:00:04.000Z" },
+      { workspace: "/projects/eight", lastWriteAt: "2026-09-30T00:00:03.000Z" },
+      { workspace: "/projects/nine", lastWriteAt: "2026-09-30T00:00:02.000Z" },
+    ]);
+  });
+
+  test("a missing Codex directory is an empty list and still requires the bridge key", async (t) => {
+    const ctx = await startE2E();
+    t.after(() => ctx.close());
+    ctx.config.codexSessionsDir = path.join(ctx.config.dataDir, "absent-codex-sessions");
+    for (const headers of [{}, { Authorization: "Bearer wrong-key" }]) {
+      const denied = await httpRequest(ctx.port, { reqPath: "/api/mcp/workspaces", headers });
+      assert.equal(denied.status, 401);
+    }
+    const res = await httpRequest(ctx.port, { reqPath: "/api/mcp/workspaces", headers: authHeaders() });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, []);
+  });
+});
+
 describe("POST /api/mcp/reinject — the manual entry for a session whose workspace arrived late", () => {
   // Nothing is injected by the call itself: it ARMS the next real turn, which
   // is the only thing that carries the preamble to the model.
@@ -382,6 +432,22 @@ describe("POST /api/mcp/reinject — the manual entry for a session whose worksp
       body: { sessionId: SESSION_ID, workspace: "/from-body" },
     });
     assert.equal(calls[0].headers["x-arena-workspace"], "/from-header", "the header wins over the body field");
+  });
+
+  test("the GUI's explicit workspace is forwarded to the selected Session", async (t) => {
+    const calls = [];
+    const ctx = await startE2E({ bridge: { reinjectLocalCapability: async (sessionId, headers) => {
+      calls.push({ sessionId, headers });
+      return { ...outcome, workspace: headers["x-arena-workspace"] };
+    } } });
+    t.after(() => ctx.close());
+    const res = await httpRequest(ctx.port, {
+      method: "POST", reqPath: "/api/mcp/reinject", headers: authHeaders(),
+      body: { sessionId: SESSION_ID, workspace: "/projects/selected" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.workspace, "/projects/selected");
+    assert.deepEqual(calls, [{ sessionId: SESSION_ID, headers: { "x-arena-workspace": "/projects/selected" } }]);
   });
 
   test("a refusal comes back with the reason AND how to fix it", async (t) => {
