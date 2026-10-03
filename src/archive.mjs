@@ -31,19 +31,23 @@ function shortStamp(d = new Date()) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export function readEntries(archiveDir) {
-  if (!archiveDir) return [];
+// Mutations must distinguish a missing archive from one that cannot be loaded.
+export function readEntries(archiveDir, { strict = false } = {}) {
+  if (!archiveDir && !strict) return [];
   const file = path.join(archiveDir, "记录.json");
   let raw;
   try {
     raw = fs.readFileSync(file, "utf8");
-  } catch {
+  } catch (error) {
+    if (strict && error.code !== "ENOENT") throw error;
     return [];
   }
   try {
     const parsed = JSON.parse(raw);
+    if (strict && !Array.isArray(parsed)) throw new Error(`Archive ${file} must contain a JSON array`);
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return [];
   }
 }
@@ -109,7 +113,7 @@ export function appendEntry(archiveDir, entry) {
     Effort: entry.effort || null,
   };
 
-  const entries = readEntries(archiveDir);
+  const entries = readEntries(archiveDir, { strict: true });
   entries.push(record);
   writeJsonAtomic(path.join(archiveDir, "记录.json"), entries);
 
@@ -124,7 +128,7 @@ export function appendEntry(archiveDir, entry) {
  * Returns the updated record, or null when no entry carries that session id.
  */
 export function updateModel(archiveDir, sessionId, model) {
-  const entries = readEntries(archiveDir);
+  const entries = readEntries(archiveDir, { strict: true });
   const needle = String(sessionId || "").toLowerCase();
   const idx = entries.findIndex((e) => String(e.Url || "").toLowerCase().includes(`/agent/${needle}`));
   if (idx < 0) return null;
@@ -161,7 +165,7 @@ export function removeEntries(archiveDir, sessionIds) {
       .map((s) => String(s || "").trim().toLowerCase())
       .filter(Boolean)
   );
-  const entries = readEntries(archiveDir);
+  const entries = readEntries(archiveDir, { strict: true });
   if (!wanted.size) return [];
 
   const kept = [];
@@ -187,7 +191,7 @@ export function removeEntries(archiveDir, sessionIds) {
 function writeModelIndex(archiveDir, folder, model) {
   const dir = path.join(archiveDir, folder);
   fs.mkdirSync(dir, { recursive: true });
-  const mine = readEntries(archiveDir).filter((e) => e.ModelFolder === folder);
+  const mine = readEntries(archiveDir, { strict: true }).filter((e) => e.ModelFolder === folder);
   const lines = [
     `# ${model || folder}`,
     "",
