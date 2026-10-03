@@ -108,3 +108,64 @@ test("删除 matches the session id regardless of case", () => {
   assert.equal(removed.length, 1);
   assert.equal(readEntries(dir).length, 0);
 });
+
+const mutations = [
+  ["append", (dir) => seed(dir, SID)],
+  ["model update", (dir) => updateModel(dir, SID, "kimi-k3")],
+  ["remove", (dir) => removeEntries(dir, [SID])],
+];
+const invalidArchives = [
+  ["malformed JSON", Buffer.from('{\r\n "entries": [')],
+  ["a JSON object", Buffer.from('{"entries": []}\r\n')],
+  ["JSON null", Buffer.from("null\n")],
+];
+
+for (const [operation, mutate] of mutations) {
+  for (const [description, bytes] of invalidArchives) {
+    test(`${operation} rejects ${description} and preserves the archive bytes`, (t) => {
+      const dir = tmpArchive();
+      t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const file = path.join(dir, "记录.json");
+      fs.writeFileSync(file, bytes);
+      fs.writeFileSync(path.join(dir, "汇总.md"), "existing summary\r\n");
+
+      let error;
+      try { mutate(dir); } catch (caught) { error = caught; }
+
+      assert.deepEqual(fs.readFileSync(file), bytes, "existing archive must not be overwritten");
+      assert.ok(error instanceof Error, "mutation must report the invalid archive");
+      assert.equal(fs.readFileSync(path.join(dir, "汇总.md"), "utf8"), "existing summary\r\n");
+      assert.deepEqual(fs.readdirSync(dir).sort(), ["汇总.md", "记录.json"].sort());
+    });
+  }
+
+  test(`${operation} rejects archive read failures before creating output files`, (t) => {
+    const dir = tmpArchive();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, "记录.json");
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, "sentinel"), "preserve this directory\r\n");
+
+    assert.throws(() => mutate(dir));
+    assert.equal(fs.readFileSync(path.join(file, "sentinel"), "utf8"), "preserve this directory\r\n");
+    assert.deepEqual(fs.readdirSync(dir), ["记录.json"]);
+  });
+}
+
+test("read-only archive loading remains tolerant of invalid files", (t) => {
+  const dir = tmpArchive();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "记录.json");
+  assert.deepEqual(readEntries(dir), []);
+  for (const [, bytes] of invalidArchives) {
+    fs.writeFileSync(file, bytes);
+    assert.deepEqual(readEntries(dir), []);
+  }
+});
+
+test("remove from a missing archive returns no entries without creating files", (t) => {
+  const dir = tmpArchive();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.deepEqual(removeEntries(dir, [SID]), []);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
