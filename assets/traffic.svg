@@ -44,46 +44,46 @@
     <text x="702" y="153" class="card-value">312</text>
   </g>
 
-  
+
     <text x="92" y="210" class="panel-title">Views</text>
     <text x="92" y="226" class="panel-subtitle">Daily page views</text>
-    
+
       <line x1="92" y1="358.0" x2="906.0" y2="358.0" class="grid"/>
       <text x="82.0" y="361.0" text-anchor="end" class="scale">0</text>
-    
+
       <line x1="92" y1="326.5" x2="906.0" y2="326.5" class="grid"/>
       <text x="82.0" y="329.5" text-anchor="end" class="scale">125</text>
-    
+
       <line x1="92" y1="295.0" x2="906.0" y2="295.0" class="grid"/>
       <text x="82.0" y="298.0" text-anchor="end" class="scale">250</text>
-    
+
       <line x1="92" y1="263.5" x2="906.0" y2="263.5" class="grid"/>
       <text x="82.0" y="266.5" text-anchor="end" class="scale">375</text>
-    
+
       <line x1="92" y1="232.0" x2="906.0" y2="232.0" class="grid"/>
       <text x="82.0" y="235.0" text-anchor="end" class="scale">500</text>
-    
+
     <path d="M 92.0 358.0 L 154.6 358.0 L 217.2 358.0 L 279.8 358.0 L 342.5 358.0 L 405.1 358.0 L 467.7 357.7 L 530.3 350.7 L 592.9 347.4 L 655.5 358.0 L 718.2 355.5 L 780.8 351.4 L 843.4 316.4 L 906.0 275.8 L 906.0 358.0 L 92 358.0 Z" class="area"/>
     <path d="M 92.0 358.0 L 154.6 358.0 L 217.2 358.0 L 279.8 358.0 L 342.5 358.0 L 405.1 358.0 L 467.7 357.7 L 530.3 350.7 L 592.9 347.4 L 655.5 358.0 L 718.2 355.5 L 780.8 351.4 L 843.4 316.4 L 906.0 275.8" class="line"/>
-  
+
     <text x="92" y="410" class="panel-title">Clones</text>
     <text x="92" y="426" class="panel-subtitle">Daily repository clones</text>
-    
+
       <line x1="92" y1="558.0" x2="906.0" y2="558.0" class="grid"/>
       <text x="82.0" y="561.0" text-anchor="end" class="scale">0</text>
-    
+
       <line x1="92" y1="526.5" x2="906.0" y2="526.5" class="grid"/>
       <text x="82.0" y="529.5" text-anchor="end" class="scale">125</text>
-    
+
       <line x1="92" y1="495.0" x2="906.0" y2="495.0" class="grid"/>
       <text x="82.0" y="498.0" text-anchor="end" class="scale">250</text>
-    
+
       <line x1="92" y1="463.5" x2="906.0" y2="463.5" class="grid"/>
       <text x="82.0" y="466.5" text-anchor="end" class="scale">375</text>
-    
+
       <line x1="92" y1="432.0" x2="906.0" y2="432.0" class="grid"/>
       <text x="82.0" y="435.0" text-anchor="end" class="scale">500</text>
-    
+
     <path d="M 92.0 558.0 L 154.6 558.0 L 217.2 558.0 L 279.8 558.0 L 342.5 558.0 L 405.1 558.0 L 467.7 552.7 L 530.3 544.9 L 592.9 495.5 L 655.5 548.2 L 718.2 547.2 L 780.8 555.7 L 843.4 526.5 L 906.0 471.8 L 906.0 558.0 L 92 558.0 Z" class="area"/>
     <path d="M 92.0 558.0 L 154.6 558.0 L 217.2 558.0 L 279.8 558.0 L 342.5 558.0 L 405.1 558.0 L 467.7 552.7 L 530.3 544.9 L 592.9 495.5 L 655.5 548.2 L 718.2 547.2 L 780.8 555.7 L 843.4 526.5 L 906.0 471.8" class="line"/>
   <text x="92.0" y="578" text-anchor="start" class="axis">2026-09-16</text><text x="467.7" y="578" text-anchor="middle" class="axis">2026-09-22</text><text x="906.0" y="578" text-anchor="end" class="axis">2026-09-29</text>

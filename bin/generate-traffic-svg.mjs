@@ -205,4 +205,4 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 </svg>
 `;
 
-await fs.writeFile(SVG_PATH, svg);
+await fs.writeFile(SVG_PATH, svg.replace(/[ \t]+$/gm, ""));
