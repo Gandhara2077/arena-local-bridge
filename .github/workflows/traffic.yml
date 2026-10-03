@@ -24,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The default branch restricts updates to repository administrators.
+          token: ${{ secrets.TRAFFIC_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
