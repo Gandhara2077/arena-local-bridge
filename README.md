@@ -181,7 +181,9 @@ model-identification probe is part of this project and ships as the single-file 
 
 ## Repository Traffic
 
-![Repository Traffic](./assets/traffic.svg)
+![Repository Traffic](https://raw.githubusercontent.com/Gandhara2077/arena-local-bridge/traffic-data/assets/traffic.svg)
+
+Updated daily. Summary counts cover the latest 14 days; the chart retains daily history.
 
 
 ## License

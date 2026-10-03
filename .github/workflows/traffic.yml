@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: repository-traffic-${{ github.ref }}
+  group: repository-traffic-data
   cancel-in-progress: false
 
 jobs:
@@ -24,9 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
         with:
-          # The default branch restricts updates to repository administrators.
-          token: ${{ secrets.TRAFFIC_TOKEN }}
+          ref: traffic-data
+          path: .traffic-data
 
       - uses: actions/setup-node@v4
         with:
@@ -36,9 +38,14 @@ jobs:
         env:
           TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: node bin/update-traffic.mjs
+        run: |
+          mkdir -p assets
+          cp .traffic-data/assets/traffic-history.json assets/traffic-history.json
+          node bin/update-traffic.mjs
+          cp assets/traffic-history.json assets/traffic.svg .traffic-data/assets/
 
       - name: Commit updated traffic
+        working-directory: .traffic-data
         run: |
           if git diff --quiet -- assets/traffic-history.json assets/traffic.svg; then
             echo "No traffic changes."
