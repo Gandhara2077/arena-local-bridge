@@ -2,7 +2,8 @@
 # run.sh — start the arena-bridge with the default local data dir.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
-export DATA_DIR="${DATA_DIR:-$HOME/.arena-bridge}"
+: "${DATA_DIR:=$HOME/.arena-bridge}"
+export DATA_DIR
 mkdir -p "$DATA_DIR"
-echo "==> arena-bridge (local) | DATA_DIR=$DATA_DIR"
+printf '==> arena-bridge (local) | DATA_DIR=%s\n' "$DATA_DIR"
 exec node src/index.mjs

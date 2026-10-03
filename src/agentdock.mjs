@@ -286,6 +286,7 @@ export class AgentDockManager {
   async status() {
     const endpoint = readEndpointFile(this.endpointFile);
     return {
+      runtime: "agentdock",
       installed: this.installed(),
       dir: this.dir,
       running: Boolean(this.tunnel || this.service) || (await portOpen(8765)),

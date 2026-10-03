@@ -83,6 +83,37 @@ bucket, and identification can be re-run on demand (补标).
 A pool is an **index, not a scheduler**. It never picks a Session for you: conversation context lives on Arena's
 side and is bound to one specific Session, so switching Sessions silently would drop that context.
 
+### Manual numeric fingerprinting (experimental)
+
+The dashboard's **补标** action first tries the execution-trace probe. If it cannot identify a model, it tries
+a numeric fingerprint: one Arena turn asks for integers and compares the reply with the local bank. This
+consumes an additional turn only when the bank is ready, and the prompt becomes part of that Session's history.
+
+Both endpoints require the bridge bearer key:
+
+- `GET /api/fingerprint/status` reports bank readiness without sending an Arena turn.
+- `POST /api/pool/fingerprint-reprobe` accepts `{"sessionId":"<UUID>","dryRun":true}`. Optional `variant`
+  selects a probe template; the default is `v1-instant`.
+- `dryRun: true` still sends a probe turn when the bank is ready, but changes neither the fingerprint bank
+  nor the archive. With `dryRun` omitted or false, the reply is stored in `DATA_DIR/fingerprint-bank.json`.
+- Only an attribution passing both the confidence and raw-margin gates updates the archive's Model.
+  An unresolved result reports `nearMiss`, `margin`, and `confidence` without changing the archived Model.
+  These are statistical inferences, not verified model identities; confidence is not a measured accuracy rate.
+
+The default raw-margin gate is 1.2 for two models. For larger banks it is capped at the winning model's own
+centroid margin against its nearest rival, so an ideal match is not rejected solely by bank geometry.
+This remains a conservative heuristic, not a calibrated false-positive or coverage guarantee; a correct
+top candidate can still be left unresolved.
+
+In the available external reference data's leave-one-condition-out checks, this default gate accepted
+0/288 GPT replies and 0/324 Claude replies. The reported 95.1%/95.7% top-candidate accuracies exclude this
+gate and therefore do not measure successful archive identification. Threshold calibration remains open.
+
+The current dashboard does not initialize or label a bank; it requires a pre-existing local
+`DATA_DIR/fingerprint-bank.json`. An empty or insufficient bank returns a failure without spending a
+fingerprint turn. Automatic fingerprinting during harvesting and automatic beta calibration are not
+connected yet. Real Arena identification accuracy has not been established.
+
 ### Bindings
 
 When a client passes a session UUID as `model`, that is an explicit choice, and the bridge records a **binding**
@@ -157,7 +188,26 @@ Treat the result as dependent on Arena's current runtime implementation, not as 
 
 ## Local MCP and the workspace
 
-When the local AgentDock MCP tunnel is up, the bridge prepends a short preamble to the session once, so the agent
+Local MCP uses this project's self-built Node runtime by default. AgentDock is an **optional legacy
+compatibility integration**, selected only with `ARENA_MCP_RUNTIME=agentdock` and an explicit
+`ARENA_AGENTDOCK_DIR`; there is no Downloads/install-directory discovery.
+
+Start from the GUI with an existing absolute workspace, or configure `ARENA_MCP_WORKSPACE`.
+`POST /api/mcp/start` accepts `{"workspace":"<absolute directory>"}` behind the bridge bearer key.
+The listener binds only to `127.0.0.1`, with `ARENA_LOCAL_MCP_PORT=8765` by default. All six tools work locally
+without AgentDock. `exec_command` is a shell running with the bridge user's permissions; its cwd is pinned
+inside the workspace, but the command is not sandboxed (ADR 0011).
+
+For remote Arena access, explicitly set `ARENA_CLOUDFLARED_PATH` to an already-installed open-source
+cloudflared executable's **absolute path**. Nothing downloads it automatically. Without it, status shows a
+local listener (`localUrl`), no public URL, and `bridgeInjecting: false`. Only a successfully published tunnel
+is injected. Startup failure, tunnel exit and stop revoke this instance's public record. If the OS refuses to
+terminate a tunnel, access is revoked immediately and the old loopback port stays occupied by a refusal handler
+until child exit is confirmed. Status reports `cleanupPending`; retry stop before starting again.
+Other instances' endpoint/PID records are never adopted or removed by the default runtime. A stale reservation
+after a crash must be inspected and resolved explicitly; startup refuses to overwrite it.
+
+When the explicit public tunnel is up, the bridge prepends a short preamble to the session once, so the agent
 knows where to work and what "delivering a file" means:
 
 ~~~text
@@ -171,8 +221,8 @@ header: Authorization: Bearer <token>
 4) 需要交付给人的产物用 file_publish 发布成 artifact。
 ~~~
 
-Rule 2 exists because relative paths never land in the workspace: today's AgentDock upstream resolves them
-against `~/AgentDock`, which is not your project, and our own MCP server rejects them outright. Rule 3 exists
+Rule 2 exists because the default self-built MCP rejects relative paths; the optional legacy AgentDock
+integration resolves them against `~/AgentDock`, which is not your project. Rule 3 exists
 because an agent that only pastes content into its reply has not delivered a file.
 
 The preamble is sent **once per session**, and only while the tunnel is up. It is kept short on purpose: a long
@@ -180,7 +230,15 @@ first message raises Arena's reCAPTCHA risk. Internal probes (体检) do **not**
 that fails before Arena receives the message: it is spent only once the prompt is really out, so a failed turn
 does not cost the user a re-injection.
 
-### Where the workspace comes from
+### Workspace authorization and conversation hints
+
+The runtime grants **one explicitly selected startup workspace**. Configuration or the GUI startup body can
+grant it; a client header or a discovered Codex transcript cannot add roots. Repeated/concurrent starts reuse
+the same grant. A different startup workspace returns `409`; stop before switching.
+
+Conversation hints are resolved separately and must remain inside that authorized workspace. A recognized
+conflicting directory returns `409` for manual reinjection and ordinary chat, even after the first preamble was
+spent. DATA_DIR remains private, and configured skills remain read-only.
 
 Highest priority first:
 
@@ -190,12 +248,16 @@ Highest priority first:
    `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<sessionId>.jsonl`, recording the working directory it ran in,
    and sends the same id as `x-codex-session-id` — so the bridge recovers the directory with no client-side
    configuration at all. Override the root with `ARENA_CODEX_SESSIONS_DIR`.
-3. `ARENA_MCP_WORKSPACE`, or a plain-text `mcp-workspace.txt` next to `archive-dir.txt`.
-4. None apply → the preamble omits the workspace line.
+3. The single recent Codex transcript, if exactly one is attributable.
+4. The explicit workspace recorded in this instance's published Local MCP endpoint. A GUI start therefore
+   works for reinjection and chat without client headers, Codex association or a configured default. A startup
+   body overrides the configured startup default.
+5. In legacy mode, `ARENA_MCP_WORKSPACE`, or the launcher's plain-text `mcp-workspace.txt` next to `archive-dir.txt`.
+6. In legacy compatibility mode only, no hint may leave the preamble without a workspace line.
 
 Detection never guesses: an unrecognised session id resolves to nothing and falls through, so a missing
 transcript cannot silently point the agent at the wrong project. The log's `workspaceFrom` records which source
-was used (`request-header | codex-session | codex-recent | config | none`).
+was used (`request-header | codex-session | codex-recent | config | local-runtime | none`).
 
 A local proxy between the client and this bridge can drop custom headers entirely. If a header you configured
 never shows up, check the bridge's `workspace hints` log line, which reports the `x-*` headers that actually
@@ -203,7 +265,11 @@ arrived.
 
 ### The manual re-injection boundary
 
-The dashboard's *re-inject* button carries no request and no Codex conversation of its own, so it can only reuse
+The default runtime can reuse the explicitly selected workspace from its owned public endpoint; no new
+persistent Session-to-workspace mapping is established. The dashboard enables *re-inject* only after a public
+tunnel is published, and it arms the next real turn instead of sending a message by itself.
+
+In legacy mode, the dashboard's *re-inject* button carries no request and no Codex conversation of its own, so it can only reuse
 what the bridge already learned while serving that Session. A Session that has **never** been served a turn here,
 combined with **more than one** recently written transcript, therefore has nothing to attribute it to — and the
 button refuses ("没认出工作区") rather than guess. Two ways out: run one real turn in the target project, which

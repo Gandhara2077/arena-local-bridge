@@ -37,18 +37,18 @@ export function requireSecret(dotEnv) {
 //      between two writers and a name an older run may have left behind;
 //   2. restrict it BEFORE the secret is in it, so there is no window in which
 //      the secret sits in the directory under the directory's own ACL;
-//   3. fill it, then rename over the target — same directory, so the protected
-//      file simply becomes the target, and nobody ever reads a half-written
-//      secret.
+//   3. fill it, then publish in the same directory: rename for replacement,
+//      or an atomic hard link for a first publication that must not overwrite.
+//      Both preserve the protected file and expose only a complete secret.
 //
-// A failure at any step removes the temporary file and rethrows: the previous
-// contents (or the absence of a file) are left exactly as they were.
+// A failure before publication removes the temporary file and rethrows: the
+// previous contents (or the absence of a file) are left exactly as they were.
 //
 // `fill` is the only thing the two writers below do differently, and neither of
 // them has to know how big the secret is: one has the bytes in hand, the other
 // copies them from the file they are already in. Neither reads anything into
 // this process, which is why no size has to be ruled out in advance.
-function stageProtectedFile(target, fill) {
+function stageProtectedFile(target, fill, { overwrite = true } = {}) {
   const tmp = `${target}.${crypto.randomBytes(6).toString("hex")}.tmp`;
   let handle = null;
   try {
@@ -57,7 +57,11 @@ function stageProtectedFile(target, fill) {
     fs.closeSync(handle);
     handle = null;
     fill(tmp);
-    fs.renameSync(tmp, target);
+    if (overwrite) fs.renameSync(tmp, target);
+    else {
+      fs.linkSync(tmp, target);
+      fs.unlinkSync(tmp);
+    }
   } catch (error) {
     if (handle !== null) {
       try {
@@ -92,8 +96,8 @@ function stageProtectedFile(target, fill) {
 }
 
 // A secret this module holds, written owner-only or not written at all.
-export function writeSecretFile(file, data) {
-  stageProtectedFile(file, (tmp) => fs.writeFileSync(tmp, data));
+export function writeSecretFile(file, data, options) {
+  stageProtectedFile(file, (tmp) => fs.writeFileSync(tmp, data), options);
 }
 
 // Windows has no POSIX mode bits: measured there, a file written with

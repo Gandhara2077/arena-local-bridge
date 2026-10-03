@@ -48,3 +48,32 @@ test("authExpiryMs returns 0 for malformed tokens", () => {
   assert.equal(authExpiryMs("arena-auth-prod-v1=notbase64"), 0);
   assert.equal(authExpiryMs(""), 0);
 });
+
+test("cookie parsing preserves duplicate names and values containing equals", () => {
+  const objects = cookieHeaderToObjects(" ignored ; a=one=two; a=three; spaced =value ");
+  assert.deepEqual(objects.map(({ name, value }) => [name, value]), [
+    ["a", "one=two"], ["a", "three"], ["spaced ", "value"],
+  ]);
+  assert.equal(cookieObjectsToHeader(null), "");
+});
+
+test("auth chunks are numeric, last duplicate wins, and gaps stop joining", () => {
+  const header = "arena-auth-prod-v1.2=C; arena-auth-prod-v1.00=old; arena-auth-prod-v1.0=A; arena-auth-prod-v1.1=B";
+  assert.equal(getAuthValue(header), "ABC");
+  assert.equal(getAuthValue("arena-auth-prod-v1.2=C; arena-auth-prod-v1.0=A"), "A");
+  assert.equal(getAuthValue("arena-auth-prod-v1.1=B"), "");
+});
+
+test("first unchunked auth value takes precedence unless it is empty", () => {
+  assert.equal(getAuthValue("arena-auth-prod-v1=first; arena-auth-prod-v1=second; arena-auth-prod-v1.0=chunk"), "first");
+  assert.equal(getAuthValue("arena-auth-prod-v1=; arena-auth-prod-v1=later; arena-auth-prod-v1.0=chunk"), "chunk");
+  assert.equal(getAuthValue("Arena-auth-prod-v1=wrong; arena-auth-prod-v1.x=wrong"), "");
+});
+
+test("invalid decoded auth JSON yields unknown expiry", () => {
+  for (const payload of ["not json", "null", "{}"] ) {
+    const header = "arena-auth-prod-v1=base64-" + Buffer.from(payload).toString("base64");
+    assert.equal(authExpiryMs(header), 0);
+    assert.equal(secondsToExpiry(header, 0), null);
+  }
+});

@@ -91,15 +91,16 @@ export function loadConfig(env = {}, { requireBridgeKey = true } = {}) {
     // Only requests carrying an explicit identity are ever replayed, so re-asking
     // the same thing by hand always starts a new turn. 0 disables.
     resultCacheTtlMs: Number(env.ARENA_RESULT_CACHE_TTL_MS || 120_000),
-    // §4.25 — file written by start-arena-mcp.ps1 while the tunnel is up
-    // ({ url, token }); absent/empty => no injection.
+    // A public endpoint is published only while an explicitly enabled tunnel
+    // is up. A loopback listener alone is never injected into Arena.
     mcpEndpointFile: env.ARENA_MCP_ENDPOINT_FILE || path.join(dataDir, "mcp-endpoint.json"),
-    // §4.26 — folder holding agentdock.exe + cloudflared.exe (GUI 一键启动用)
-    agentdockDir: env.ARENA_AGENTDOCK_DIR || detectAgentdockDir(),
-    // Which local directory this conversation is about. The MCP preamble tells
-    // the Arena agent to write generated files here — without it, AgentDock's
-    // relative paths resolve to ~/AgentDock, which is not the user's project.
-    // Unset => the preamble simply omits the workspace line.
+    mcpRuntime: String(env.ARENA_MCP_RUNTIME || "local").trim().toLowerCase(),
+    localMcpPort: Number(env.ARENA_LOCAL_MCP_PORT ?? 8765),
+    cloudflaredPath: String(env.ARENA_CLOUDFLARED_PATH || "").trim(),
+    // Optional compatibility runtime; there is no install-directory probing.
+    agentdockDir: String(env.ARENA_AGENTDOCK_DIR || "").trim(),
+    // Explicit startup workspace. The GUI may supply one instead; neither
+    // recent transcripts nor a client header can grant roots to the listener.
     mcpWorkspace: String(env.ARENA_MCP_WORKSPACE || "").trim(),
     // ADR 0008 — skill roots the user EXPLICITLY listed (path.delimiter-
     // separated absolute directories, e.g. ARENA_SKILL_ROOTS="C:\a;C:\b").
@@ -121,23 +122,16 @@ export function loadConfig(env = {}, { requireBridgeKey = true } = {}) {
   if (!Number.isFinite(config.port) || config.port < 1 || config.port > 65535) {
     throw new Error(`Invalid PORT: ${config.port}`);
   }
-  return config;
-}
-
-// §4.26 — find an AgentDock install under ~/Downloads (…/AgentDock-*/agentdock.exe)
-// so the GUI works without setting ARENA_AGENTDOCK_DIR by hand.
-function detectAgentdockDir() {
-  try {
-    const downloads = path.join(os.homedir(), "Downloads");
-    for (const name of fs.readdirSync(downloads)) {
-      if (!/^agentdock/i.test(name)) continue;
-      const dir = path.join(downloads, name);
-      if (fs.existsSync(path.join(dir, "agentdock.exe"))) return dir;
-    }
-  } catch {
-    /* ignore */
+  if (!["local", "agentdock"].includes(config.mcpRuntime)) {
+    throw new Error(`Invalid ARENA_MCP_RUNTIME: ${config.mcpRuntime}`);
   }
-  return "";
+  if (!Number.isInteger(config.localMcpPort) || config.localMcpPort < 0 || config.localMcpPort > 65535) {
+    throw new Error(`Invalid ARENA_LOCAL_MCP_PORT: ${config.localMcpPort}`);
+  }
+  if (config.cloudflaredPath && !path.isAbsolute(config.cloudflaredPath)) {
+    throw new Error("ARENA_CLOUDFLARED_PATH must be an absolute executable path");
+  }
+  return config;
 }
 
 function parseRootList(raw, label) {

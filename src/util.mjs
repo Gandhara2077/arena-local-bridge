@@ -71,48 +71,49 @@ export function compactSchema(value, depth = 0) {
 }
 
 export function looseJson(raw) {
-  const value = String(raw ?? "")
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g, '$1"$2"$3')
-    .replace(/,\s*([}\]])/g, "$1")
-    .replace(/\bTrue\b/g, "true")
-    .replace(/\bFalse\b/g, "false")
-    .replace(/\bNone\b/g, "null");
-  try {
-    return JSON.parse(value);
-  } catch {
+  let value = String(raw ?? "").trim();
+  for (const [pattern, replacement] of [
+    [/^```(?:json)?\s*/i, ""],
+    [/\s*```$/i, ""],
+    [/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g, '$1"$2"$3'],
+    [/,\s*([}\]])/g, "$1"],
+    [/\bTrue\b/g, "true"],
+    [/\bFalse\b/g, "false"],
+    [/\bNone\b/g, "null"],
+  ]) value = value.replace(pattern, replacement);
+
+  for (const candidate of [value, value.replace(/'/g, '"')]) {
     try {
-      return JSON.parse(value.replace(/'/g, '"'));
+      return JSON.parse(candidate);
     } catch {
-      return null;
+      // The second candidate accepts the existing single-quote convention.
     }
   }
+  return null;
 }
 
 // ── tiny structured JSON logger ──────────────────────────────
-function iso() {
-  return new Date().toISOString();
+function writeLog(method, level, event, msg, fields) {
+  const err = level === "error" && fields.err instanceof Error ? fields.err : null;
+  const entry = { ts: new Date().toISOString(), level, event, msg, ...fields };
+  if (err) {
+    entry.errorName = err.name;
+    entry.errorMessage = err.message;
+    entry.errorStack = err.stack ? err.stack.split("\n").slice(0, 6).join(" | ") : "";
+    delete entry.err;
+  }
+  console[method](JSON.stringify(entry));
 }
 
 export const log = {
   info(event, msg, fields = {}) {
-    console.log(JSON.stringify({ ts: iso(), level: "info", event, msg, ...fields }));
+    writeLog("log", "info", event, msg, fields);
   },
   warn(event, msg, fields = {}) {
-    console.warn(JSON.stringify({ ts: iso(), level: "warn", event, msg, ...fields }));
+    writeLog("warn", "warn", event, msg, fields);
   },
   error(event, msg, fields = {}) {
-    const err = fields.err instanceof Error ? fields.err : null;
-    const out = { ts: iso(), level: "error", event, msg, ...fields };
-    if (err) {
-      out.errorName = err.name;
-      out.errorMessage = err.message;
-      out.errorStack = err.stack ? err.stack.split("\n").slice(0, 6).join(" | ") : "";
-      delete out.err;
-    }
-    console.error(JSON.stringify(out));
+    writeLog("error", "error", event, msg, fields);
   },
 };
 
@@ -125,12 +126,13 @@ export async function retry(fn, { attempts = 3, baseMs = 500, maxMs = 8000, shou
     } catch (error) {
       lastError = error;
       if (attempt >= attempts || !shouldRetry(error)) throw error;
-      const backoff = Math.min(maxMs, baseMs * 2 ** (attempt - 1)) * (0.7 + Math.random() * 0.6);
-      log.warn("retry", `${label} attempt ${attempt}/${attempts} failed; retrying in ${Math.round(backoff)}ms`, {
+      const capped = Math.min(maxMs, baseMs * 2 ** (attempt - 1));
+      const delayMs = Math.round(capped * (0.7 + Math.random() * 0.6));
+      log.warn("retry", `${label} attempt ${attempt}/${attempts} failed; retrying in ${delayMs}ms`, {
         attempt,
         errorType: error?.name || "Error",
       });
-      await sleep(Math.round(backoff));
+      await sleep(delayMs);
     }
   }
   throw lastError;
