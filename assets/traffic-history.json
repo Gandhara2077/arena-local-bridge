@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-03T05:34:01.690Z",
+  "updated_at": "2026-10-03T05:37:07.709Z",
   "days": [
     {
       "date": "2026-09-16",
@@ -116,7 +116,7 @@
     }
   ],
   "latest_14_days": {
-    "captured_at": "2026-10-03T05:34:01.690Z",
+    "captured_at": "2026-10-03T05:37:07.709Z",
     "views": {
       "count": 989,
       "uniques": 202
