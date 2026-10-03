@@ -111,7 +111,10 @@ describe("the portable archive", {
   // Called with no arguments, so it runs even when a test above it threw. The
   // archive and its unpacked copy are ~137 MB, which is reason enough not to
   // leave them in the OS temp directory.
-  after(() => fs.rmSync(root, { recursive: true, force: true }));
+  after(() => {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 
   test("the runtime is the Node the packager was pointed at, and it runs", () => {
     const runtime = path.join(unpacked, "runtime", WIN ? "node.exe" : "node");
@@ -150,7 +153,8 @@ describe("the refusal paths", () => {
   // so copying it next to the two modules it imports — version.mjs, which reads
   // package.json for the version, and browser-detect.mjs, which imports nothing
   // but node builtins — gives the same code running against a tree we may plant
-  // things in. Copying the checkout instead would take node_modules with it.
+  // things in. Every SHIP entry exists, so refusal tests reach their intended
+  // checks; their unused files and dependencies can be empty.
   before(() => {
     root = tempDir("arena-pkg-root-");
     script = path.join(root, "bin", "package-portable.mjs");
@@ -163,9 +167,59 @@ describe("the refusal paths", () => {
       fs.mkdirSync(path.dirname(path.join(root, to)), { recursive: true });
       fs.copyFileSync(from, path.join(root, to));
     }
+    for (const entry of WHITELIST.filter((entry) => entry !== "runtime")) {
+      const file = path.join(root, entry);
+      if (fs.existsSync(file)) continue;
+      if (entry === "node_modules") fs.mkdirSync(file);
+      else fs.writeFileSync(file, "");
+    }
   });
 
-  after(() => fs.rmSync(root, { recursive: true, force: true }));
+  after(() => {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a missing required entry is named before an existing staged tree is touched", () => {
+    const license = path.join(root, "LICENSE");
+    const saved = fs.readFileSync(license);
+    const out = path.join(root, "out-missing");
+    const stage = path.join(out, `arena-bridge-portable-${VERSION}-${process.platform}`);
+    fs.mkdirSync(stage, { recursive: true });
+    const sentinel = path.join(stage, "previous-stage.txt");
+    fs.writeFileSync(sentinel, "keep the existing stage");
+    try {
+      fs.rmSync(license);
+      const r = pack({ script, out });
+      assert.equal(r.status, 1, "a missing required entry has to stop the run");
+      assert.match(r.stderr, /Missing required package entries: LICENSE/);
+      assert.equal(fs.readFileSync(sentinel, "utf8"), "keep the existing stage", "preflight must precede staging");
+      assert.deepEqual(archivesIn(out), []);
+    } finally {
+      fs.writeFileSync(license, saved);
+    }
+  });
+
+  test("an invalid version cannot move recursive staging cleanup outside the output directory", () => {
+    const manifest = path.join(root, "package.json");
+    const saved = fs.readFileSync(manifest, "utf8");
+    const out = path.join(root, "out-invalid-stage");
+    const outside = path.join(root, `outside-${process.platform}`);
+    assert.equal(path.dirname(path.resolve(outside)), path.resolve(root));
+    fs.mkdirSync(outside);
+    const sentinel = path.join(outside, "keep.txt");
+    fs.writeFileSync(sentinel, "outside the generated output");
+    try {
+      fs.writeFileSync(manifest, JSON.stringify({ ...JSON.parse(saved), version: "../../../outside" }));
+      const r = pack({ script, out });
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /Invalid staging path/);
+      assert.equal(fs.readFileSync(sentinel, "utf8"), "outside the generated output");
+      assert.deepEqual(archivesIn(out), []);
+    } finally {
+      fs.writeFileSync(manifest, saved);
+    }
+  });
 
   test("a browser anywhere in the staged tree is refused, and named", () => {
     const planted = path.join(root, "src", "ms-playwright");
@@ -178,7 +232,11 @@ describe("the refusal paths", () => {
       assert.match(r.stderr, /Refusing to ship a browser \(ADR 0005\)/);
       assert.match(r.stderr, /ms-playwright/, "and it has to say which path it found");
       assert.deepEqual(archivesIn(out), [], "a refused package must not produce an archive");
+      assert.equal(fs.existsSync(path.join(out, `arena-bridge-portable-${VERSION}-${process.platform}`)), false,
+        "a browser refusal must remove the generated staging tree");
+      assert.match(r.stderr, /Staged tree removed/);
     } finally {
+      assert.equal(path.dirname(path.dirname(path.resolve(planted))), path.resolve(root));
       fs.rmSync(planted, { recursive: true, force: true });
     }
   });
@@ -198,8 +256,27 @@ describe("the refusal paths", () => {
       assert.match(r.stderr, /Refusing to ship \d+ MB unpacked/);
       assert.match(r.stderr, /huge\.bin/, "\"400 MB of something\" is not actionable on its own");
       assert.deepEqual(archivesIn(out), [], "a refused package must not produce an archive");
+      assert.equal(fs.existsSync(path.join(out, `arena-bridge-portable-${VERSION}-${process.platform}`)), false,
+        "a size refusal must remove the generated staging tree");
+      assert.match(r.stderr, /Staged tree removed/);
     } finally {
       fs.rmSync(big, { force: true });
     }
+  });
+
+  test("an archive failure still preserves the staged tree for manual recovery", () => {
+    const out = path.join(root, "out-archive-failure");
+    // The script still runs with the real Node; only its external archiver is
+    // unavailable. Empty both spellings because Windows env keys ignore case.
+    const r = run(process.execPath, [script, "--out", out, "--node", process.execPath], {
+      env: { ...process.env, PATH: "", Path: "" },
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /No archiver found/);
+    const stage = path.join(out, `arena-bridge-portable-${VERSION}-${process.platform}`);
+    assert.ok(fs.existsSync(stage), "archive failure must leave the tree for recovery");
+    assert.match(r.stderr, /The staged tree is still at/);
+    assert.equal(fs.readFileSync(path.join(stage, "package.json"), "utf8"), fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    assert.deepEqual(archivesIn(out), []);
   });
 });
