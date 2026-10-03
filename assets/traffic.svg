@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-labelledby="title desc">
+  <title id="title">Arena Local Bridge repository traffic</title>
+  <desc id="desc">Views and clones collected from GitHub repository traffic data.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .title { fill: #1f2328; font-size: 24px; font-weight: 700; }
+    .subtitle { fill: #656d76; font-size: 13px; }
+    .card { fill: #f6f8fa; stroke: #d8dee4; }
+    .card-label { fill: #656d76; font-size: 12px; font-weight: 600; }
+    .card-value { fill: #1f2328; font-size: 22px; font-weight: 700; }
+    .panel-title { fill: #1f2328; font-size: 15px; font-weight: 700; }
+    .panel-subtitle { fill: #656d76; font-size: 11px; }
+    .grid { stroke: #eaeef2; stroke-width: 1; }
+    .line { fill: none; stroke: #0969da; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    .area { fill: #ddf4ff; opacity: .65; }
+    .scale { fill: #8c959f; font-size: 10px; }
+    .axis { fill: #656d76; font-size: 10px; }
+    .empty { fill: #f6f8fa; stroke: #d8dee4; }
+    .empty-title { fill: #1f2328; font-size: 17px; font-weight: 600; }
+    .empty-text { fill: #656d76; font-size: 12px; }
+    .footer { fill: #8c959f; font-size: 10px; }
+  </style>
+  <rect x="0.5" y="0.5" width="959" height="599" rx="16" class="bg"/>
+  <text x="54" y="48" class="title">Repository Traffic</text>
+  <text x="54" y="69" class="subtitle">Since 2026-09-16 · 16 daily records retained</text>
+
+  <g>
+    <rect x="54" y="94" width="198" height="92" rx="12" class="card"/>
+    <text x="72" y="121" class="card-label">VIEWS · 14 DAYS</text>
+    <text x="72" y="153" class="card-value">989</text>
+
+    <rect x="264" y="94" width="198" height="92" rx="12" class="card"/>
+    <text x="282" y="121" class="card-label">UNIQUE VISITORS</text>
+    <text x="282" y="153" class="card-value">202</text>
+
+    <rect x="474" y="94" width="198" height="92" rx="12" class="card"/>
+    <text x="492" y="121" class="card-label">CLONES · 14 DAYS</text>
+    <text x="492" y="153" class="card-value">1,383</text>
+
+    <rect x="684" y="94" width="222" height="92" rx="12" class="card"/>
+    <text x="702" y="121" class="card-label">UNIQUE CLONERS</text>
+    <text x="702" y="153" class="card-value">470</text>
+  </g>
+
+
+    <text x="92" y="210" class="panel-title">Views</text>
+    <text x="92" y="226" class="panel-subtitle">Daily page views</text>
+
+      <line x1="92" y1="358.0" x2="906.0" y2="358.0" class="grid"/>
+      <text x="82.0" y="361.0" text-anchor="end" class="scale">0</text>
+
+      <line x1="92" y1="326.5" x2="906.0" y2="326.5" class="grid"/>
+      <text x="82.0" y="329.5" text-anchor="end" class="scale">125</text>
+
+      <line x1="92" y1="295.0" x2="906.0" y2="295.0" class="grid"/>
+      <text x="82.0" y="298.0" text-anchor="end" class="scale">250</text>
+
+      <line x1="92" y1="263.5" x2="906.0" y2="263.5" class="grid"/>
+      <text x="82.0" y="266.5" text-anchor="end" class="scale">375</text>
+
+      <line x1="92" y1="232.0" x2="906.0" y2="232.0" class="grid"/>
+      <text x="82.0" y="235.0" text-anchor="end" class="scale">500</text>
+
+    <path d="M 92.0 358.0 L 146.3 358.0 L 200.5 358.0 L 254.8 358.0 L 309.1 358.0 L 363.3 358.0 L 417.6 357.7 L 471.9 350.7 L 526.1 347.4 L 580.4 358.0 L 634.7 355.5 L 688.9 351.4 L 743.2 316.4 L 797.5 275.8 L 851.7 314.2 L 906.0 303.6 L 906.0 358.0 L 92 358.0 Z" class="area"/>
+    <path d="M 92.0 358.0 L 146.3 358.0 L 200.5 358.0 L 254.8 358.0 L 309.1 358.0 L 363.3 358.0 L 417.6 357.7 L 471.9 350.7 L 526.1 347.4 L 580.4 358.0 L 634.7 355.5 L 688.9 351.4 L 743.2 316.4 L 797.5 275.8 L 851.7 314.2 L 906.0 303.6" class="line"/>
+
+    <text x="92" y="410" class="panel-title">Clones</text>
+    <text x="92" y="426" class="panel-subtitle">Daily repository clones</text>
+
+      <line x1="92" y1="558.0" x2="906.0" y2="558.0" class="grid"/>
+      <text x="82.0" y="561.0" text-anchor="end" class="scale">0</text>
+
+      <line x1="92" y1="526.5" x2="906.0" y2="526.5" class="grid"/>
+      <text x="82.0" y="529.5" text-anchor="end" class="scale">125</text>
+
+      <line x1="92" y1="495.0" x2="906.0" y2="495.0" class="grid"/>
+      <text x="82.0" y="498.0" text-anchor="end" class="scale">250</text>
+
+      <line x1="92" y1="463.5" x2="906.0" y2="463.5" class="grid"/>
+      <text x="82.0" y="466.5" text-anchor="end" class="scale">375</text>
+
+      <line x1="92" y1="432.0" x2="906.0" y2="432.0" class="grid"/>
+      <text x="82.0" y="435.0" text-anchor="end" class="scale">500</text>
+
+    <path d="M 92.0 558.0 L 146.3 558.0 L 200.5 558.0 L 254.8 558.0 L 309.1 558.0 L 363.3 558.0 L 417.6 552.7 L 471.9 544.9 L 526.1 495.5 L 580.4 548.2 L 634.7 547.2 L 688.9 555.7 L 743.2 526.5 L 797.5 471.8 L 851.7 449.1 L 906.0 539.9 L 906.0 558.0 L 92 558.0 Z" class="area"/>
+    <path d="M 92.0 558.0 L 146.3 558.0 L 200.5 558.0 L 254.8 558.0 L 309.1 558.0 L 363.3 558.0 L 417.6 552.7 L 471.9 544.9 L 526.1 495.5 L 580.4 548.2 L 634.7 547.2 L 688.9 555.7 L 743.2 526.5 L 797.5 471.8 L 851.7 449.1 L 906.0 539.9" class="line"/>
+  <text x="92.0" y="578" text-anchor="start" class="axis">2026-09-16</text><text x="471.9" y="578" text-anchor="middle" class="axis">2026-09-23</text><text x="906.0" y="578" text-anchor="end" class="axis">2026-10-01</text>
+
+  <text x="54" y="594" class="footer">Source: GitHub Repository Traffic API · daily history retained by this repository</text>
+</svg>
