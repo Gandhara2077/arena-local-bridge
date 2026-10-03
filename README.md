@@ -178,6 +178,14 @@ released under the MIT License; its copyright notice is recorded in [NOTICE.md](
 model-identification probe is part of this project and ships as the single-file artifact
 `assets/arena-model-probe.inject.js`.
 
+
+## Repository Traffic
+
+![Repository Traffic](https://raw.githubusercontent.com/Gandhara2077/arena-local-bridge/traffic-data/assets/traffic.svg)
+
+Updated daily. Summary counts cover the latest 14 days; the chart retains daily history.
+
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

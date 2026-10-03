@@ -169,6 +169,14 @@ npm test
 （MIT License），其版权声明记录在 [NOTICE.md](NOTICE.md)。模型识别探针是本项目自身代码，
 以单文件产物 `assets/arena-model-probe.inject.js` 随仓库分发。
 
+
+## 仓库流量
+
+![Repository Traffic](https://raw.githubusercontent.com/Gandhara2077/arena-local-bridge/traffic-data/assets/traffic.svg)
+
+每日自动更新。汇总数字为最近 14 天的统计，图表保留历史记录。
+
+
 ## 许可证
 
 MIT。详见 [LICENSE](LICENSE)。

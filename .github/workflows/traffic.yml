@@ -1,0 +1,59 @@
+name: Repository Traffic
+
+on:
+  push:
+    branches:
+      - main
+      - feature/repository-traffic
+    paths-ignore:
+      - assets/traffic-history.json
+      - assets/traffic.svg
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repository-traffic-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          ref: traffic-data
+          path: .traffic-data
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Collect traffic
+        env:
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p assets
+          cp .traffic-data/assets/traffic-history.json assets/traffic-history.json
+          node bin/update-traffic.mjs
+          cp assets/traffic-history.json assets/traffic.svg .traffic-data/assets/
+
+      - name: Commit updated traffic
+        working-directory: .traffic-data
+        run: |
+          if git diff --quiet -- assets/traffic-history.json assets/traffic.svg; then
+            echo "No traffic changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/traffic-history.json assets/traffic.svg
+          git commit -m "chore: update repository traffic"
+          git pull --rebase
+          git push
