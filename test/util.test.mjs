@@ -101,3 +101,35 @@ test("retry passes attempt numbers, retries allowed errors, and preserves non-re
   }, { attempts: 2, baseMs: 0, maxMs: 0 }), (error) => error === exhausted);
   assert.equal(calls, 2);
 });
+
+test("retry caps backoff before jitter and never asks to retry the final failure", async (t) => {
+  const delays = [];
+  const rows = [];
+  t.mock.method(globalThis, "setTimeout", (callback, delay) => { delays.push(delay); callback(); });
+  t.mock.method(Math, "random", () => 1);
+  t.mock.method(console, "warn", (line) => rows.push(JSON.parse(line)));
+  const failure = new TypeError("private detail");
+  let decisions = 0;
+  await assert.rejects(retry(() => { throw failure; }, {
+    attempts: 4, baseMs: 10, maxMs: 15, label: "fixture",
+    shouldRetry: (error) => { assert.equal(error, failure); decisions++; return true; },
+  }), (error) => error === failure);
+  assert.deepEqual(delays, [13, 19, 19]);
+  assert.equal(decisions, 3);
+  assert.deepEqual(rows.map(({ attempt, errorType }) => [attempt, errorType]), [[1, "TypeError"], [2, "TypeError"], [3, "TypeError"]]);
+  assert.ok(rows.every((row) => !JSON.stringify(row).includes("private detail")));
+});
+
+test("logger preserves field overrides and bounds expanded error stacks", (t) => {
+  const rows = [];
+  t.mock.method(console, "log", (line) => rows.push(JSON.parse(line)));
+  t.mock.method(console, "error", (line) => rows.push(JSON.parse(line)));
+  log.info("event", "message", { ts: "custom", level: "custom", event: "override", msg: "override" });
+  assert.deepEqual(rows[0], { ts: "custom", level: "custom", event: "override", msg: "override" });
+  const err = new Error("fixture");
+  err.stack = Array.from({ length: 8 }, (_, index) => `line ${index}`).join("\n");
+  log.error("event", "message", { err });
+  assert.equal(rows[1].errorStack, "line 0 | line 1 | line 2 | line 3 | line 4 | line 5");
+  log.error("event", "message", { err: "value" });
+  assert.equal(rows[2].err, "value");
+});

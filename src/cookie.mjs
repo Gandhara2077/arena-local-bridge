@@ -1,26 +1,24 @@
 // cookie.mjs — arena.ai cookie header <-> Playwright cookie objects,
 // plus auth-token expiry parsing. Pure module (testable).
-import { record } from "./util.mjs";
-
 export const AUTH_PREFIX = "arena-auth-prod-v1";
 
 export function cookieHeaderToObjects(raw) {
-  return String(raw ?? "")
-    .split(";")
-    .map((x) => x.trim())
-    .filter((x) => x.includes("="))
-    .map((x) => {
-      const i = x.indexOf("=");
-      return {
-        name: x.slice(0, i),
-        value: x.slice(i + 1),
-        domain: "arena.ai",
-        path: "/",
-        secure: true,
-        httpOnly: false,
-        sameSite: "Lax",
-      };
+  const cookies = [];
+  for (const segment of String(raw ?? "").split(";")) {
+    const pair = segment.trim();
+    const separator = pair.indexOf("=");
+    if (separator < 0) continue;
+    cookies.push({
+      name: pair.slice(0, separator),
+      value: pair.slice(separator + 1),
+      domain: "arena.ai",
+      path: "/",
+      secure: true,
+      httpOnly: false,
+      sameSite: "Lax",
     });
+  }
+  return cookies;
 }
 
 export function cookieObjectsToHeader(objects) {
@@ -30,24 +28,18 @@ export function cookieObjectsToHeader(objects) {
 
 /** Extract the joined value of arena-auth-prod-v1[.N] chunks. */
 export function getAuthValue(raw) {
-  const parts = String(raw ?? "")
-    .split(";")
-    .map((p) => p.trim())
-    .filter((p) => p.includes("="))
-    .map((p) => {
-      const i = p.indexOf("=");
-      return [p.slice(0, i), p.slice(i + 1)];
-    });
-  let value = parts.find(([name]) => name === AUTH_PREFIX)?.[1] || "";
-  if (!value) {
-    const chunks = new Map(
-      parts
-        .filter(([name]) => /^arena-auth-prod-v1\.\d+$/.test(name))
-        .map(([name, v]) => [Number(name.split(".").at(-1)), v])
-    );
-    for (let i = 0; chunks.has(i); i++) value += chunks.get(i);
+  const cookies = cookieHeaderToObjects(raw);
+  const direct = cookies.find(({ name }) => name === AUTH_PREFIX);
+  if (direct?.value) return direct.value;
+
+  const chunks = new Map();
+  for (const { name, value } of cookies) {
+    const match = /^arena-auth-prod-v1\.(\d+)$/.exec(name);
+    if (match) chunks.set(Number(match[1]), value);
   }
-  return value;
+  const ordered = [];
+  while (chunks.has(ordered.length)) ordered.push(chunks.get(ordered.length));
+  return ordered.join("");
 }
 
 /** Return the auth token's expires_at epoch-ms (0 when unparsable).
@@ -56,10 +48,9 @@ export function authExpiryMs(raw) {
   try {
     const value = getAuthValue(raw);
     if (!value.startsWith("base64-")) return 0;
-    const payload = JSON.parse(Buffer.from(value.slice(7), "base64").toString("utf8"));
-    let expiresAt = Number(payload.expires_at || 0);
-    if (expiresAt > 0 && expiresAt < 1e12) expiresAt *= 1000; // seconds -> ms
-    return expiresAt;
+    const json = Buffer.from(value.slice("base64-".length), "base64").toString("utf8");
+    const expiresAt = Number(JSON.parse(json).expires_at || 0);
+    return expiresAt > 0 && expiresAt < 1e12 ? expiresAt * 1000 : expiresAt;
   } catch {
     return 0;
   }

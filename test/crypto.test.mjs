@@ -4,6 +4,19 @@ import { deriveKey, encrypt, decrypt, isEncrypted } from "../src/crypto.mjs";
 
 const key = deriveKey("test-secret-123");
 
+test("the scrypt key and a stored enc:v1 fixture remain byte compatible", () => {
+  const fixtureKey = deriveKey("fixture-secret");
+  assert.equal(fixtureKey.toString("hex"), "081daca6715dfa77fd04c0417d229212f3328521e5dca3a635d566347649be33");
+  const stored = "enc:v1:00112233445566778899aabbccddeeff:be7c9daaa8b0c2a44b2cfffa:f021616209c60a93e9667080256150a6";
+  assert.equal(decrypt(stored, fixtureKey), "legacy field");
+});
+
+test("a missing encryption secret fails before deriving a key", () => {
+  for (const secret of [undefined, null, "", false, 0]) {
+    assert.throws(() => deriveKey(secret), /STORAGE_ENCRYPTION_KEY is missing/);
+  }
+});
+
 test("encrypt/decrypt round-trip", () => {
   const ct = encrypt("hello world", key);
   assert.equal(isEncrypted(ct), true);
@@ -28,6 +41,12 @@ test("tampered ciphertext fails auth", () => {
   const parts = ct.split(":");
   parts[3] = (parseInt(parts[3], 16) ^ 1).toString(16).padStart(parts[3].length, "0"); // flip a bit
   assert.throws(() => decrypt(parts.join(":"), key));
+});
+
+test("odd-length ciphertext hex is rejected rather than truncated", () => {
+  const parts = encrypt("fixture plaintext", key).split(":");
+  parts[3] += "f";
+  assert.throws(() => decrypt(parts.join(":"), key), { code: "ERR_INVALID_ARG_VALUE" });
 });
 
 test("different secrets yield different keys (decrypt fails)", () => {

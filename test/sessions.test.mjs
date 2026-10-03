@@ -42,3 +42,30 @@ test("SessionStore expires stale sessions on read and persistence", (t) => {
     next: store.get("next"),
   });
 });
+
+test("SessionStore treats missing or malformed snapshots as an empty map", (t) => {
+  const { filePath, store } = temporaryStore(t);
+  assert.equal(store.size, 0);
+  for (const contents of ["broken JSON", "null"]) {
+    fs.writeFileSync(filePath, contents);
+    assert.equal(new SessionStore({ filePath, ttlMs: 60_000 }).size, 0);
+  }
+});
+
+test("SessionStore preserves TTL boundary, lazy deletion and snapshot framing", (t) => {
+  const { filePath } = temporaryStore(t);
+  t.mock.method(Date, "now", () => 100_000);
+  const boundary = { updatedAt: 40_000, token: "synthetic" };
+  fs.writeFileSync(filePath, JSON.stringify({ boundary, expired: { updatedAt: 39_999 }, empty: null }));
+  const store = new SessionStore({ filePath, ttlMs: 60_000 });
+  assert.equal(store.size, 3);
+  assert.deepEqual(store.get("boundary"), boundary);
+  assert.equal(store.get("expired"), undefined);
+  assert.equal(store.size, 2);
+  assert.ok(Object.hasOwn(JSON.parse(fs.readFileSync(filePath, "utf8")), "expired"));
+  store.persist();
+  assert.equal(store.size, 1);
+  assert.equal(fs.readFileSync(filePath, "utf8"), JSON.stringify({ boundary }, null, 2));
+  assert.equal(fs.existsSync(`${filePath}.tmp`), false);
+  if (process.platform !== "win32") assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+});

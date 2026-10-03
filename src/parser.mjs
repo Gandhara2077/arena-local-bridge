@@ -6,12 +6,13 @@ import { record, looseJson } from "./util.mjs";
 import { requestedTools, contentText } from "./format.mjs";
 
 export function parsePublicToken(html) {
+  const source = String(html || "");
   for (const re of [
     /\\"publicAccessToken\\":\\"([^\\"]+)/,
     /"publicAccessToken":"([^"]+)"/,
     /publicAccessToken[^A-Za-z0-9_-]+([A-Za-z0-9._-]{80,})/,
   ]) {
-    const m = String(html || "").match(re);
+    const m = source.match(re);
     if (m) return m[1];
   }
   return "";
@@ -22,77 +23,85 @@ export function parsePublicToken(html) {
  * Returns { text, reasoning, token, lastNodeId, lastEventId, requiresReview, nativeCalls }.
  */
 export function parseAgentOutput(raw) {
-  let text = "";
-  let reasoning = "";
-  let token = "";
-  let lastNodeId = null;
-  let lastEventId = "";
-  let requiresReview = false;
+  const output = { text: "", reasoning: "", token: "", lastNodeId: null, lastEventId: "", requiresReview: false, nativeCalls: [] };
   const nativeById = new Map();
-  const nativeCalls = [];
   const normalizedRaw = String(raw || "").replace(/\r\n/g, "\n");
   const finalBoundary = normalizedRaw.lastIndexOf("\n\n");
-  const completeRaw = finalBoundary >= 0 ? normalizedRaw.slice(0, finalBoundary) : "";
-  for (const block of completeRaw.split(/\n\n+/)) {
-    const blockLines = block.split("\n");
-    const idLine = blockLines.find((line) => line.startsWith("id: "));
-    if (idLine) lastEventId = idLine.slice(4).trim();
-    const dataLine = blockLines.find((line) => line.startsWith("data: "));
-    if (!dataLine) continue;
+  if (finalBoundary < 0) return output;
+
+  for (const block of normalizedRaw.slice(0, finalBoundary).split(/\n\n+/)) {
+    let idLine;
+    let dataLine;
+    for (const line of block.split("\n")) {
+      if (idLine === undefined && line.startsWith("id: ")) idLine = line;
+      if (dataLine === undefined && line.startsWith("data: ")) dataLine = line;
+    }
+    if (idLine !== undefined) output.lastEventId = idLine.slice(4).trim();
+    if (dataLine === undefined) continue;
     let event;
     try {
       event = JSON.parse(dataLine.slice(6));
     } catch {
       continue;
     }
-    for (const record of Array.isArray(event.records) ? event.records : []) {
-      if (Array.isArray(record.headers)) {
-        for (const [name, value] of record.headers) {
-          if (String(name).toLowerCase() === "public-access-token") token = String(value);
+    for (const entry of Array.isArray(event.records) ? event.records : []) {
+      if (Array.isArray(entry.headers)) {
+        for (const [name, value] of entry.headers) {
+          if (String(name).toLowerCase() === "public-access-token") output.token = String(value);
         }
       }
-      if (!record.body) continue;
+      if (!entry.body) continue;
       let body;
       try {
-        body = JSON.parse(record.body);
+        body = JSON.parse(entry.body);
       } catch {
         continue;
       }
       const data = body.data || {};
-      if (data.type === "text-delta" && typeof data.delta === "string") text += data.delta;
-      if ((data.type === "reasoning-delta" || data.type === "thinking-delta") && typeof data.delta === "string")
-        reasoning += data.delta;
-      if (data.type === "tool-input-start" && data.toolCallId) {
-        nativeById.set(String(data.toolCallId), {
-          id: String(data.toolCallId),
-          name: String(data.toolName || ""),
-          rawInput: "",
-        });
-      }
-      if (data.type === "tool-input-delta" && data.toolCallId) {
-        const id = String(data.toolCallId);
-        const current = nativeById.get(id) || { id, name: String(data.toolName || ""), rawInput: "" };
-        current.rawInput += String(data.inputTextDelta || "");
-        nativeById.set(id, current);
-      }
-      if ((data.type === "tool-input-available" || data.type === "tool-input-error") && data.toolCallId) {
-        const id = String(data.toolCallId);
-        const current = nativeById.get(id) || { id, name: "", rawInput: "" };
-        current.name = String(data.toolName || current.name || "");
-        current.input = data.input && typeof data.input === "object" ? data.input : looseJson(current.rawInput);
-        if (!current.emitted && current.input && typeof current.input === "object") {
-          current.emitted = true;
-          nativeCalls.push(current);
+      switch (data.type) {
+        case "text-delta":
+          if (typeof data.delta === "string") output.text += data.delta;
+          break;
+        case "reasoning-delta":
+        case "thinking-delta":
+          if (typeof data.delta === "string") output.reasoning += data.delta;
+          break;
+        case "tool-input-start": {
+          if (!data.toolCallId) break;
+          const id = String(data.toolCallId);
+          nativeById.set(id, { id, name: String(data.toolName || ""), rawInput: "" });
+          break;
         }
-        nativeById.set(id, current);
-      }
-      if (data.type === "finish") {
-        lastNodeId = data.messageMetadata?.nodeId || lastNodeId;
-        requiresReview = data.messageMetadata?.requiresReview === true;
+        case "tool-input-delta": {
+          if (!data.toolCallId) break;
+          const id = String(data.toolCallId);
+          const current = nativeById.get(id) || { id, name: String(data.toolName || ""), rawInput: "" };
+          current.rawInput += String(data.inputTextDelta || "");
+          nativeById.set(id, current);
+          break;
+        }
+        case "tool-input-available":
+        case "tool-input-error": {
+          if (!data.toolCallId) break;
+          const id = String(data.toolCallId);
+          const current = nativeById.get(id) || { id, name: "", rawInput: "" };
+          current.name = String(data.toolName || current.name || "");
+          current.input = data.input && typeof data.input === "object" ? data.input : looseJson(current.rawInput);
+          if (!current.emitted && current.input && typeof current.input === "object") {
+            current.emitted = true;
+            output.nativeCalls.push(current);
+          }
+          nativeById.set(id, current);
+          break;
+        }
+        case "finish":
+          output.lastNodeId = data.messageMetadata?.nodeId || output.lastNodeId;
+          output.requiresReview = data.messageMetadata?.requiresReview === true;
+          break;
       }
     }
   }
-  return { text, reasoning, token, lastNodeId, lastEventId, requiresReview, nativeCalls };
+  return output;
 }
 
 export function externalToolDefinition(tools, name) {
@@ -188,24 +197,31 @@ export function minimallyValidAgainstSchema(value, schema, depth = 0) {
     return false;
   if (Array.isArray(schema.oneOf) && !schema.oneOf.some((item) => minimallyValidAgainstSchema(value, item, depth + 1)))
     return false;
-  if (schema.type === "object") {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    if (Array.isArray(schema.required) && schema.required.some((key) => value[key] === undefined || value[key] === null))
-      return false;
-    const properties = record(schema.properties);
-    return Object.entries(properties).every(
-      ([key, child]) => value[key] === undefined || minimallyValidAgainstSchema(value[key], child, depth + 1)
-    );
+  switch (schema.type) {
+    case "object": {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      for (const key of Array.isArray(schema.required) ? schema.required : []) {
+        if (value[key] === undefined || value[key] === null) return false;
+      }
+      for (const [key, child] of Object.entries(record(schema.properties))) {
+        if (value[key] !== undefined && !minimallyValidAgainstSchema(value[key], child, depth + 1)) return false;
+      }
+      return true;
+    }
+    case "array":
+      if (!Array.isArray(value)) return false;
+      if (Number.isFinite(schema.minItems) && value.length < schema.minItems) return false;
+      if (Number.isFinite(schema.maxItems) && value.length > schema.maxItems) return false;
+      return !schema.items || value.every((item) => minimallyValidAgainstSchema(item, schema.items, depth + 1));
+    case "string":
+    case "boolean":
+    case "number":
+      if (typeof value !== schema.type) return false;
+      break;
+    case "integer":
+      if (typeof value !== "number") return false;
+      break;
   }
-  if (schema.type === "array") {
-    if (!Array.isArray(value)) return false;
-    if (Number.isFinite(schema.minItems) && value.length < schema.minItems) return false;
-    if (Number.isFinite(schema.maxItems) && value.length > schema.maxItems) return false;
-    return !schema.items || value.every((item) => minimallyValidAgainstSchema(item, schema.items, depth + 1));
-  }
-  if (schema.type === "string" && typeof value !== "string") return false;
-  if ((schema.type === "number" || schema.type === "integer") && typeof value !== "number") return false;
-  if (schema.type === "boolean" && typeof value !== "boolean") return false;
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return false;
   return true;
 }
@@ -233,14 +249,15 @@ export function prepareExternalToolCall(name, rawInput, tools, idPrefix = "arena
 }
 
 export function parseToolCalls(text, tools, maxParallel = 8) {
+  const source = String(text || "");
   const names = requestedTools(tools);
   const byNorm = new Map(names.map((tool) => [tool.normalized, tool.name]));
   const calls = [];
   const signatures = new Set();
   const ranges = [];
-  const re = /<(?:tool|tool_call)>\s*([\s\S]*?)\s*<\/(?:tool|tool_call)>/gi;
-  let match;
-  while ((match = re.exec(String(text || ""))) && calls.length < maxParallel) {
+  const blocks = source.matchAll(/<(?:tool|tool_call)>\s*([\s\S]*?)\s*<\/(?:tool|tool_call)>/gi);
+  for (const match of blocks) {
+    if (!(calls.length < maxParallel)) break;
     const parsed = looseJson(match[1]);
     if (!parsed) continue;
     const emitted = String(parsed.name || parsed.tool || parsed.command || "");
@@ -255,10 +272,13 @@ export function parseToolCalls(text, tools, maxParallel = 8) {
     if (signatures.has(signature)) continue;
     signatures.add(signature);
     calls.push(call);
-    ranges.push([match.index, re.lastIndex]);
+    ranges.push([match.index, match.index + match[0].length]);
   }
-  let content = String(text || "");
-  for (const [start, end] of ranges.reverse()) content = content.slice(0, start) + content.slice(end);
+  let content = source;
+  for (let index = ranges.length - 1; index >= 0; index--) {
+    const [start, end] = ranges[index];
+    content = content.slice(0, start) + content.slice(end);
+  }
   return { content: content.trim(), toolCalls: calls.length ? calls : null };
 }
 
@@ -323,7 +343,7 @@ export function toolResultLooksFailed(message, text) {
 export function repeatedToolGuard(body, toolCalls) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return null;
   const messages = Array.isArray(body?.messages) ? body.messages : [];
-  const previousCalls = [];
+  const previousCalls = new Set();
   let latestResult = "";
   let latestName = "tool";
   let latestFailed = false;
@@ -332,7 +352,7 @@ export function repeatedToolGuard(body, toolCalls) {
     if (message?.role === "assistant" && Array.isArray(message.tool_calls)) {
       for (const call of message.tool_calls) {
         const fn = record(call?.function);
-        previousCalls.push(toolCallSignature(call));
+        previousCalls.add(toolCallSignature(call));
         if (call?.id) namesById.set(call.id, String(fn.name || "tool"));
       }
     }
@@ -343,7 +363,7 @@ export function repeatedToolGuard(body, toolCalls) {
     }
   }
   if (!latestResult || latestFailed) return null;
-  const repeated = toolCalls.every((call) => previousCalls.includes(toolCallSignature(call)));
+  const repeated = toolCalls.every((call) => previousCalls.has(toolCallSignature(call)));
   if (!repeated) return null;
   return [
     `The external ${latestName} operation already succeeded and was intentionally not executed twice.`,

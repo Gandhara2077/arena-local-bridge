@@ -44,3 +44,49 @@ test("get: the mint is released after a failure, so the next call can retry", as
   assert.equal(browser.calls.length, 2, "失败不该把后续调用永久挡在门外");
   assert.equal(broker.status().errors, 2);
 });
+
+test("forced refresh failure reuses a fresh token but expiry boundary rejects it", async (t) => {
+  let now = 1_000;
+  t.mock.method(Date, "now", () => now);
+  const credential = { email: "synthetic@example.com" };
+  const failure = new Error("fixture offline");
+  let calls = 0;
+  const broker = new RecaptchaBroker({ siteKey: "fixture-key", ttlMs: 1_000, browser: {
+    freshRecaptchaToken: async (received, key) => {
+      assert.equal(received, credential);
+      assert.equal(key, "fixture-key");
+      if (++calls > 1) throw failure;
+      return "fixture-token";
+    },
+  } });
+  assert.equal(await broker.get(credential), "fixture-token");
+  now = 1_500;
+  assert.equal(await broker.get(credential, true), "fixture-token");
+  assert.deepEqual(broker.status(), { cached: true, ageMs: 500, ttlMs: 1_000, generations: 1, errors: 1, lastError: "fixture offline" });
+  now = 2_000;
+  assert.equal(broker.isFresh(), false);
+  await assert.rejects(broker.get(credential), (error) => error === failure);
+  assert.equal(broker.pendingMint, null);
+});
+
+test("all concurrent callers share rejection and a subsequent mint succeeds", async () => {
+  let rejectMint;
+  let calls = 0;
+  const failure = new Error("shared failure");
+  const broker = new RecaptchaBroker({ siteKey: "k", browser: {
+    freshRecaptchaToken: () => ++calls === 1
+      ? new Promise((resolve, reject) => { rejectMint = reject; })
+      : Promise.resolve("recovered"),
+  } });
+  const first = broker.get({}, true);
+  const second = broker.get({}, true);
+  rejectMint(failure);
+  const settled = await Promise.allSettled([first, second]);
+  assert.ok(settled.every((result) => result.status === "rejected" && result.reason === failure));
+  assert.equal(calls, 1);
+  assert.equal(broker.status().errors, 1);
+  assert.equal(broker.pendingMint, null);
+  assert.equal(await broker.get({}, true), "recovered");
+  assert.equal(broker.status().lastError, null);
+  assert.equal(broker.status().generations, 1);
+});
