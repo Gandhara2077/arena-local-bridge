@@ -18,26 +18,46 @@ export class CredentialStore {
     this.omniRoot = omniRoot;
     this.accounts = []; // [{email, cookieHeader, loginSecret(enc), updatedAt, priority}]
     this.lastLoginError = null;
+    this.loadError = null;
   }
 
   load() {
+    this.loadError = null;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
-      this.accounts = Array.isArray(parsed.accounts) ? parsed.accounts : [];
+      if (!parsed || Array.isArray(parsed) || !Array.isArray(parsed.accounts) ||
+          !parsed.accounts.every((a) => a && typeof a.email === "string" && a.email.trim() && typeof a.cookieHeader === "string")) {
+        throw new Error("Credential file must contain an accounts array with email and cookieHeader fields");
+      }
+      this.accounts = parsed.accounts;
       log.info("credentials", `loaded ${this.accounts.length} account(s) from ${this.filePath}`);
     } catch (error) {
-      if (error.code !== "ENOENT") log.warn("credentials", "credential file unreadable", { error: String(error.message) });
+      if (error.code !== "ENOENT") {
+        this.loadError = error;
+        // JSON parser errors can quote the saved content; keep secrets out of logs.
+        log.warn("credentials", "credential file unreadable", { error: error.code || error.name });
+      }
       this.accounts = [];
     }
     return this;
   }
 
+  assertWritable() {
+    if (this.loadError) {
+      throw Object.assign(new Error(
+        "Saved credentials could not be read. Restore DATA_DIR/credentials.json or explicitly move it aside, then restart the bridge."
+      ), { status: 409, code: "credentials_unreadable" });
+    }
+  }
+
   save() {
+    this.assertWritable();
     writeSecretFile(this.filePath, JSON.stringify({ version: 1, accounts: this.accounts }, null, 2));
   }
 
   /** Ensure credentials exist: migrate from omni (opt-in), otherwise a clear error. */
   ensure({ migrateFromOmni = false } = {}) {
+    this.assertWritable();
     const primary = this.primary();
     if (primary) return primary;
     if (this.accounts.length) {
@@ -63,6 +83,7 @@ export class CredentialStore {
   }
 
   upsert({ email, cookieHeader, password, priority = 1 }) {
+    this.assertWritable();
     const existing = this.#find(email);
     const entry = {
       email: String(email),
@@ -86,9 +107,24 @@ export class CredentialStore {
     return entry;
   }
 
-  replaceCookie(email, cookieHeader) {
+  // A login awaits browser I/O while a newer GUI login may update the same
+  // account. Compare the captured credential copy before applying its result;
+  // timestamps alone can collide when two saves happen in one millisecond.
+  #matchesSnapshot(account, expected) {
+    if (!expected) return true;
+    try {
+      return account.email.toLowerCase() === String(expected.email).toLowerCase() &&
+        account.updatedAt === expected.updatedAt && account.loginSecret === expected.loginSecret &&
+        Boolean(account.disabled) === Boolean(expected.disabled) &&
+        decrypt(account.cookieHeader, this.key) === expected.cookieHeader;
+    } catch {
+      return false;
+    }
+  }
+
+  replaceCookie(email, cookieHeader, expected = null) {
     const account = this.#find(email);
-    if (!account) return false;
+    if (!account || !this.#matchesSnapshot(account, expected)) return false;
     account.cookieHeader = this.#encryptCookie(String(cookieHeader));
     account.updatedAt = new Date().toISOString();
     // A cookie that just refreshed proves the account works again.
@@ -162,9 +198,9 @@ export class CredentialStore {
   }
 
   /** Reject an account (login failed, or the session is not actually usable). */
-  disable(email, reason = "") {
+  disable(email, reason = "", expected = null) {
     const account = this.#find(email);
-    if (!account) return false;
+    if (!account || !this.#matchesSnapshot(account, expected)) return false;
     account.disabled = true;
     account.lastError = String(reason || "disabled");
     account.disabledAt = new Date().toISOString();

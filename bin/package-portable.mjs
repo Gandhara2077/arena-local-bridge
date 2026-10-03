@@ -7,7 +7,9 @@
 // Nothing is downloaded here either. The Node runtime to bundle has to be on
 // this machine already: --node <dir-or-exe>, defaulting to the Node running
 // this script. A maintainer who wants an official build drops the Node zip next
-// to it and points --node at that.
+// to it and points --node at that. Its LICENSE must be beside the executable,
+// or supplied explicitly with --node-license. Build the lightweight Windows
+// launcher first; --launcher overrides the default dist/ArenaLocalBridge.exe.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -27,8 +29,22 @@ const nodeGiven = arg("--node", path.dirname(process.execPath));
 const nodeExe = fs.existsSync(nodeGiven) && fs.statSync(nodeGiven).isDirectory()
   ? path.join(nodeGiven, process.platform === "win32" ? "node.exe" : "node")
   : nodeGiven;
-if (!fs.existsSync(nodeExe)) {
+function isFile(file) {
+  try { return fs.statSync(file).isFile(); } catch { return false; }
+}
+
+if (!isFile(nodeExe)) {
   console.error(`No Node runtime at ${nodeExe}. Pass --node <dir-or-exe> (nothing is downloaded).`);
+  process.exit(1);
+}
+const nodeLicense = path.resolve(arg("--node-license", path.join(path.dirname(nodeExe), "LICENSE")));
+if (!isFile(nodeLicense) || fs.statSync(nodeLicense).size === 0) {
+  console.error(`No Node license at ${nodeLicense}. Supply the chosen runtime's LICENSE beside Node or pass --node-license <file>.`);
+  process.exit(1);
+}
+const launcher = path.resolve(arg("--launcher", path.join(ROOT, "dist", "ArenaLocalBridge.exe")));
+if (!isFile(launcher) || fs.statSync(launcher).size === 0) {
+  console.error(`No Windows launcher at ${launcher}. Run npm run build:launcher or pass --launcher <exe>.`);
   process.exit(1);
 }
 
@@ -39,6 +55,7 @@ const SHIP = [
   "src",
   "bin",
   "node_modules",
+  "launcher",
   "package.json",
   "README.md",
   "README.zh-CN.md",
@@ -52,13 +69,17 @@ const SHIP = [
   "install.sh",
 ];
 
-const missingEntries = SHIP.filter((entry) => !fs.existsSync(path.join(ROOT, entry)));
+const requiredFiles = ["bin/gui-runtime.mjs", "bin/build-launcher.ps1", "launcher/ArenaLocalBridge.cs"];
+const missingEntries = [
+  ...SHIP.filter((entry) => !fs.existsSync(path.join(ROOT, entry))),
+  ...requiredFiles.filter((entry) => !isFile(path.join(ROOT, entry))),
+];
 if (missingEntries.length) {
   console.error(`Missing required package entries: ${missingEntries.join(", ")}.`);
   process.exit(1);
 }
 
-const name = `arena-bridge-portable-${VERSION}-${process.platform}`;
+const name = `arena-bridge-portable-${VERSION}-${process.platform}-${process.arch}`;
 const stage = path.join(outDir, name);
 if (path.dirname(stage) !== outDir) {
   console.error(`Invalid staging path: ${stage}. It must be directly inside ${outDir}.`);
@@ -74,7 +95,9 @@ for (const entry of SHIP) {
   });
 }
 fs.mkdirSync(path.join(stage, "runtime"), { recursive: true });
-fs.copyFileSync(nodeExe, path.join(stage, "runtime", path.basename(nodeExe)));
+fs.copyFileSync(nodeExe, path.join(stage, "runtime", process.platform === "win32" ? "node.exe" : "node"));
+fs.copyFileSync(nodeLicense, path.join(stage, "runtime", "LICENSE"));
+fs.copyFileSync(launcher, path.join(stage, "ArenaLocalBridge.exe"));
 
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -113,12 +136,14 @@ if (stagedMb > LIMIT_MB) {
 fs.mkdirSync(outDir, { recursive: true });
 const zip = path.join(outDir, `${name}.zip`);
 fs.rmSync(zip, { force: true });
+const psQuote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+const literalEntries = fs.readdirSync(stage).map((entry) => psQuote(path.join(stage, entry))).join(", ");
 const pack =
   process.platform === "win32"
     ? spawnSync(
         "powershell",
-        ["-NoProfile", "-NonInteractive", "-Command", `Compress-Archive -Path '${path.join(stage, "*")}' -DestinationPath '${zip}' -Force`],
-        { stdio: "inherit" }
+        ["-NoProfile", "-NonInteractive", "-Command", `Compress-Archive -LiteralPath @(${literalEntries}) -DestinationPath ${psQuote(zip)} -Force`],
+        { stdio: "inherit", windowsHide: true }
       )
     : spawnSync("zip", ["-q", "-r", zip, "."], { cwd: stage, stdio: "inherit" });
 if (pack.error || pack.status !== 0) {
@@ -137,6 +162,6 @@ console.log(`\n${zip}`);
 console.log(`${mb.toFixed(1)} MB zipped · ${stagedMb.toFixed(0)} MB unpacked · ${shipped.length} files · no browser bundled.`);
 console.log(
   process.platform === "win32"
-    ? "To use it: unzip, double-click start-gui.bat (it prefers the bundled runtime/node)."
-    : "The launcher in this archive (start-gui.bat) is Windows-only, which is what this release targets; here, start it with runtime/node src/index.mjs."
+    ? "To use it: unzip, double-click ArenaLocalBridge.exe (it uses the bundled runtime/node.exe)."
+    : "ArenaLocalBridge.exe is Windows-only; this host archive can run with runtime/node src/index.mjs."
 );

@@ -221,7 +221,7 @@
   .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
   .form-row > label { flex: 1 1 120px; min-width: 110px; }
   .form-row > label > span { display: block; font-size: 11.8px; color: var(--dim); margin-bottom: 4px; }
-  input[type="text"], input[type="number"], textarea, select {
+  input[type="text"], input[type="number"], input[type="email"], input[type="password"], textarea, select {
     width: 100%; font-family: inherit; font-size: 12.8px; color: var(--txt);
     background: #fff; border: 1px solid var(--line-2); border-radius: 9px; padding: 7px 10px;
     transition: border-color .16s ease, box-shadow .16s ease;
@@ -432,6 +432,17 @@
             </button>
           </div>
           <div id="accounts"></div>
+          <form id="accountLoginForm" method="post" action="/api/accounts/login" style="margin-top:12px">
+            <div class="form-row">
+              <label><span>Arena 邮箱 / Email</span><input id="accountEmail" name="email" type="email" autocomplete="username" maxlength="254" required /></label>
+              <label><span>密码 / Password</span><input id="accountPassword" name="password" type="password" autocomplete="current-password" maxlength="4096" required /></label>
+            </div>
+            <div class="row">
+              <button class="btn-primary" id="accountLogin" type="submit">登录并保存 / Sign in</button>
+              <span class="muted" id="accountLoginStatus" role="status" aria-live="polite"></span>
+            </div>
+            <div class="hint" style="margin-top:6px">凭据会加密保存在本机；登录成功后即可使用账号。</div>
+          </form>
         </section>
 
         <section class="panel">
@@ -1069,7 +1080,7 @@ function renderAccounts(status) {
   const box = $("#accounts");
   if (!box) return;
   if (!list.length) {
-    box.innerHTML = emptyState(ICON.inbox, "没有账号", "先运行 <code>node bin/login.mjs</code> 添加一个 Arena 账号。");
+    box.innerHTML = emptyState(ICON.inbox, "没有账号", "在下方登录 Arena 账号即可开始使用。");
     return;
   }
   box.innerHTML = list
@@ -1088,6 +1099,29 @@ function renderAccounts(status) {
       </div>`;
     })
     .join("");
+}
+
+async function loginAccount(event) {
+  event.preventDefault();
+  const button = $("#accountLogin");
+  const status = $("#accountLoginStatus");
+  if (button.disabled) return;
+  button.disabled = true;
+  status.textContent = "正在登录并验证账号…";
+  try {
+    const result = await keyPost("/api/accounts/login", {
+      email: $("#accountEmail").value.trim(),
+      password: $("#accountPassword").value,
+    });
+    if (!result.ok) throw new Error(result.error?.message || "登录失败，请重试。");
+    status.textContent = "登录成功，凭据已加密保存。";
+    await render();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    $("#accountPassword").value = "";
+    button.disabled = false;
+  }
 }
 
 async function refreshQuota(btn) {
@@ -1385,6 +1419,7 @@ $("#tsStop").addEventListener("click", tsStop);
 $("#selAll").addEventListener("click", () => selectAll(true));
 $("#selNone").addEventListener("click", () => selectAll(false));
 $("#quotaRefresh").addEventListener("click", () => refreshQuota($("#quotaRefresh")));
+$("#accountLoginForm").addEventListener("submit", loginAccount);
 $("#selDel").addEventListener("click", () => deleteSessions([...SELECTED]));
 $("#selAll2").addEventListener("click", () => selectAll(true));
 $("#selNone2").addEventListener("click", () => selectAll(false));

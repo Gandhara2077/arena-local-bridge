@@ -6,6 +6,7 @@
 //  4) auto-refreshes the arena.ai session before the cookie expires,
 //  5) graceful shutdown.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { loadDotEnv, loadConfig } from "./config.mjs";
@@ -22,7 +23,7 @@ const STARTED_AT = Date.now();
 
 async function main() {
   // 1. Environment (DATA_DIR/.env overrides process env only when unset)
-  const dataDir = process.env.DATA_DIR || path.join(process.env.HOME || "/root", ".arena-bridge");
+  const dataDir = process.env.DATA_DIR || path.join(os.homedir(), ".arena-bridge");
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const dotEnv = loadDotEnv(path.join(dataDir, ".env"));
   const mergedEnv = { ...dotEnv, ...process.env };
@@ -101,21 +102,22 @@ async function main() {
   try {
     credential = credentials.ensure({ migrateFromOmni: config.migrateFromOmni });
   } catch (error) {
-    log.error(
-      "boot",
-      error.message +
-        " Run: node bin/login.mjs --email <your-arena-email> --password <your-password> (password is stored encrypted)."
-    );
-    process.exit(1);
+    log.warn("boot", "no usable credentials; sign in through the GUI", {
+      hint: `Open http://${config.host}:${config.port}/`,
+      error: error.message,
+    });
   }
-  log.info("boot", "credential ready", {
-    account: credential.email,
-    cookieExpiry: credentials.expirySummary(credential),
-    autoRefresh: Boolean(credentials.loginSecretFor(credential)),
-  });
+  if (credential) {
+    log.info("boot", "credential loaded; awaiting usability verification", {
+      account: credential.email,
+      cookieExpiry: credentials.expirySummary(credential),
+      autoRefresh: Boolean(credentials.loginSecretFor(credential)),
+    });
+  }
 
   // 5. Browser + bridge + recaptcha
   const bridge = new Bridge({ config, credentials, recaptcha: null, startedAt: STARTED_AT });
+  bridge.launcherInstance = String(process.env.ARENA_LAUNCHER_INSTANCE || "");
   const recaptcha = new RecaptchaBroker({
     browser: bridge.browser,
     siteKey: config.recaptchaSiteKey,
@@ -123,7 +125,9 @@ async function main() {
   });
   bridge.recaptcha = recaptcha;
 
-  await bridge.start();
+  // First run must reach the GUI without spending a browser context or Arena
+  // session. The existing login form launches the browser only on submission.
+  if (credential) await bridge.start();
 
   // 6. HTTP server
   const server = createServer({ bridge, config });
@@ -152,7 +156,11 @@ async function main() {
       }
       try {
         const result = await bridge.browser.login(loginSecret.email, loginSecret.password);
-        credentials.replaceCookie(result.email, result.cookieHeader);
+        if (!credentials.replaceCookie(result.email, result.cookieHeader, account)) {
+          log.info("refresh", "ignored outdated account verification", { account: account.email });
+          return null;
+        }
+        bridge.readyAccounts.add(result.email.toLowerCase());
         // No close() here any more. The new cookie changes that Account's
         // credential signature, which marks its context stale; the next getPage
         // rebuilds it — once that Account is idle, so a refresh can no longer
@@ -161,19 +169,23 @@ async function main() {
         log.info("refresh", "account verified and refreshed", { account: result.email });
         return result.email;
       } catch (error) {
-        credentials.disable(account.email, error.message);
+        if (!credentials.disable(account.email, error.message, account)) {
+          log.info("refresh", "ignored outdated account verification", { account: account.email });
+          return null;
+        }
+        bridge.readyAccounts.delete(account.email.toLowerCase());
         tried.push(account.email);
         log.error("refresh", "account unusable; trying next", { account: account.email, error: error.message });
       }
     }
   }
 
-  // 7. Verify the account now that the port is up (a slow login must not make
-  // start-gui.bat's 6-second port probe report a failed start).
+  // 7. Verify after HTTP is available. The launcher can open the first-run GUI
+  // from /health while a slow account login keeps /ready unavailable.
   ensureUsableAccount()
     .then((email) => {
       if (email) log.info("boot", "usable account confirmed", { account: email });
-      else log.error("boot", "no usable Arena account", { error: credentials.lastLoginError });
+      else if (!bridge.healthPayload().ready) log.error("boot", "no usable Arena account", { error: credentials.lastLoginError });
     })
     .catch((error) => log.error("boot", "account verification crashed", { error: error.message }));
 
