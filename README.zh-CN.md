@@ -102,6 +102,11 @@ curl -X POST http://127.0.0.1:20140/v1/chat/completions \
 - **本地 MCP** —— 可选功能，默认使用项目自建的 Node 运行时。无需安装 AgentDock，六个工具都能使用：
   读文件、列目录、搜索、编辑、执行命令和发布文件。显式启用公网隧道后，Arena 才能连接这些工具。
   在消息真正交给 Arena 之前失败的 turn 不会消耗一次性前言。
+  手动重注入没认出工作区时，可在界面里选择最近的 Codex 工作区并确认；Bridge 不会替你挑候选。
+  这次选择仅用于下一轮消息真正交给 Arena 的请求，发送失败时保留；该轮显式的 `x-arena-workspace` 头优先。
+  受 bridge key 保护的 `GET /api/mcp/workspaces` 按时间倒序返回最多十个去重候选，形状为
+  `{ workspace, lastWriteAt }`（ISO 时间），不含 transcript 内容或文件名。Codex sessions 目录不存在时
+  返回空数组，界面保留原有的恢复提示。
 - **采集与批量测试** —— 批量创建与驱动 Session。
 - **本地运维界面** —— Session、模型池、绑定、账号与额度一目了然。
 

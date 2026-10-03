@@ -15,7 +15,7 @@
 // name across the whole tree rather than by guessing recent date directories.
 import fs from "node:fs";
 import path from "node:path";
-import { workspaceFromHeaders } from "./mcp-preamble.mjs";
+import { WORKSPACE_HEADER, workspaceFromHeaders } from "./mcp-preamble.mjs";
 
 /** Only the head of a transcript is read — `cwd` appears near the start. */
 const HEAD_BYTES = 256 * 1024;
@@ -55,7 +55,7 @@ function readCwdOf(file) {
     try {
       const buf = Buffer.alloc(HEAD_BYTES);
       const read = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
-      return extractCwd(buf.subarray(0, read).toString("utf8"));
+      return workspaceFromHeaders({ [WORKSPACE_HEADER]: extractCwd(buf.subarray(0, read).toString("utf8")) });
     } finally {
       fs.closeSync(fd);
     }
@@ -109,6 +109,20 @@ function listTranscripts(sessionsRoot) {
   return out;
 }
 
+/** Recent candidates for an explicit user choice; never attributes a Session. */
+export function listRecentCodexWorkspaces({ sessionsRoot } = {}) {
+  const seen = new Set();
+  const workspaces = [];
+  for (const transcript of listTranscripts(sessionsRoot).sort((a, b) => b.mtimeMs - a.mtimeMs)) {
+    const workspace = readCwdOf(transcript.file);
+    if (!workspace || seen.has(workspace)) continue;
+    seen.add(workspace);
+    workspaces.push({ workspace, lastWriteAt: new Date(transcript.mtimeMs).toISOString() });
+    if (workspaces.length === 10) break;
+  }
+  return workspaces;
+}
+
 export function resolveRecentCodexWorkspace({ sessionsRoot, now = Date.now(), windowMs = RECENT_WINDOW_MS } = {}) {
   const file = soleRecentTranscript(listTranscripts(sessionsRoot), now, windowMs);
   return file ? readCwdOf(file) : "";
@@ -157,6 +171,6 @@ export function resolveWorkspace({ headers = null, sessionsRoot = "", windowMs =
   const fromRecent = resolveRecentCodexWorkspace({ sessionsRoot, windowMs });
   if (fromRecent) return { workspace: fromRecent, source: "codex-recent" };
 
-  const configured = String(fallback || "").trim();
+  const configured = workspaceFromHeaders({ [WORKSPACE_HEADER]: fallback });
   return { workspace: configured, source: configured ? "config" : "none" };
 }

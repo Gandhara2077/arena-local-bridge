@@ -40,9 +40,12 @@ Until a dedicated security contact is configured, report suspected vulnerabiliti
 
 Normal operation communicates with Arena.ai.
 
-Model identification reads Arena's execution trace back from **trigger.dev** (`api.trigger.dev` run/trace
-endpoints), using the short-lived public run token the Arena page is given for that run. This is an intentional
-part of the identification mechanism and should be considered when evaluating privacy and availability.
+The execution-trace identification path can read Arena's trace from **trigger.dev** (`api.trigger.dev`
+run/trace endpoints), when Arena exposes a short-lived public run token. Current agent-mode sessions may not
+expose that token. The manual numeric-fingerprint path instead sends an ordinary Arena turn and scores the
+reply locally. Its browser page also carries the existing trace probe, so trace traffic remains possible
+when the required token is available. Probe replies are stored locally unless `dryRun` is true; see
+[manual numeric fingerprinting](SKILL.md#manual-numeric-fingerprinting-experimental) for the archive-write boundaries.
 
 Optional proxy/tunnel integrations can introduce additional network destinations; enable them only when you
 understand their trust model.
@@ -55,4 +58,4 @@ understand their trust model.
 - Review optional proxy/tunnel configuration before enabling it.
 - Treat a public MCP URL and bearer token as local-tool authority. Stop the tunnel after use. AgentDock is an
   explicitly selected optional legacy integration; the default path requires no third-party closed-source runtime.
-- Remember that model identification traffic reaches trigger.dev.
+- Remember that trace probes can contact trigger.dev, while numeric probes consume an Arena turn.

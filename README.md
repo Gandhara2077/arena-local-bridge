@@ -103,6 +103,12 @@ A stable `x-codex-session-id` keeps one persistent Arena session per client conv
 - **Local MCP** — optional, with our self-built Node runtime as the default. All six tools work without
   AgentDock: read, list, search, edit, execute and publish. An explicitly enabled tunnel lets Arena reach them.
   A turn that fails before Arena receives the message does not spend the one-shot preamble.
+  If manual re-injection cannot identify the workspace, choose a recent Codex workspace in the UI and confirm;
+  the bridge never chooses a candidate for you. The choice applies to the next turn whose message reaches Arena,
+  survives a failed send, and yields to that turn's explicit `x-arena-workspace` header.
+  The bridge-key-protected `GET /api/mcp/workspaces` returns up to ten distinct candidates, newest first,
+  as `{ workspace, lastWriteAt }` (ISO timestamp), without transcript contents or filenames. A missing Codex
+  sessions directory returns an empty array, and the existing recovery hint remains available.
 - **Harvesting and batch testing** — create and drive many sessions at once.
 - **Local operations UI** — sessions, pools, bindings, accounts and quota at a glance.
 

@@ -15,7 +15,7 @@ import {
   repeatedToolGuard,
 } from "./parser.mjs";
 import { log, retry, maskTunnelUrl } from "./util.mjs";
-import { injectionPlan, mcpPreamble } from "./mcp-preamble.mjs";
+import { injectionPlan, mcpPreamble, WORKSPACE_HEADER, workspaceFromHeaders } from "./mcp-preamble.mjs";
 import { resolveWorkspace } from "./codex-workspace.mjs";
 import { decidePath } from "./path-guard.mjs";
 import { readSnapshot } from "./probe/index.mjs";
@@ -124,7 +124,8 @@ export class Bridge {
     // automatic injection already fired. Armed by /api/mcp/reinject, spent by
     // the first real turn that follows — see localCapabilityForTurn (which
     // decides) and commitLocalCapability (which spends).
-    this.mcpReinjectPending = new Set();
+    // An explicit user choice travels with that one-shot arming, not a binding.
+    this.mcpReinjectPending = new Map();
     // Which Codex conversation drives each Arena session, remembered from the
     // turns that came with the header. A manual re-injection has no request to
     // read it from (see #workspaceHeaders).
@@ -256,10 +257,15 @@ export class Bridge {
    */
   localCapabilityForTurn(sessionId, headers = null) {
     const endpoint = this.#currentEndpoint();
-    const pending = this.mcpReinjectPending.has(sessionId);
+    const pendingRequest = this.mcpReinjectPending.get(sessionId);
+    const pending = !!pendingRequest;
+    const workspaceHeaders = this.#workspaceHeaders(sessionId, headers);
+    if (!workspaceFromHeaders(workspaceHeaders)) {
+      workspaceHeaders[WORKSPACE_HEADER] = pendingRequest?.workspace || "";
+    }
     // Check a recognized caller workspace even when this Session has already
     // spent its injection: an old preamble must not authorize another project.
-    const resolved = endpoint ? this.#endpointWorkspace(endpoint, sessionId, headers) : null;
+    const resolved = endpoint ? this.#endpointWorkspace(endpoint, sessionId, workspaceHeaders) : null;
     const plan = injectionPlan({
       injected: this.mcpInjected.get(sessionId) || "",
       endpoint: endpoint?.fingerprint || "",
@@ -280,6 +286,7 @@ export class Bridge {
       // endpoint file may already describe a different tunnel, and the ledger
       // has to record what this turn actually said.
       sessionId,
+      pendingRequest,
       fingerprint: endpoint.fingerprint,
       endpointUrl: endpoint.url,
     };
@@ -296,7 +303,9 @@ export class Bridge {
     if (!decision?.injected) return;
     this.mcpInjected.set(decision.sessionId, decision.fingerprint);
     this.#saveMcpInjected();
-    if (decision.pending) this.mcpReinjectPending.delete(decision.sessionId);
+    if (decision.pending && this.mcpReinjectPending.get(decision.sessionId) === decision.pendingRequest) {
+      this.mcpReinjectPending.delete(decision.sessionId);
+    }
     const what = decision.pending
       ? "local capability re-injected (armed by request)"
       : "converse: injecting local MCP endpoint into session";
@@ -340,7 +349,7 @@ export class Bridge {
       });
       return { injected: false, pending: false, reason: "no workspace recognized", workspace: "", workspaceFrom: source };
     }
-    this.mcpReinjectPending.add(sessionId);
+    this.mcpReinjectPending.set(sessionId, { workspace: source === "request-header" ? workspace : "" });
     log.info("bridge", "local capability re-injection armed for the next turn", {
       sessionId,
       workspace,
@@ -617,33 +626,6 @@ export class Bridge {
       }
       if (!clicked) await page.waitForTimeout(2_500);
       if (((await editor.count().catch(() => 0))) > 0) break;
-    }
-    // ── DIAGNOSTIC: dump composer + buttons at the decision point ──────────
-    try {
-      const diag = await page.evaluate(() => {
-        const vis = (el) => {
-          const r = el.getBoundingClientRect();
-          const s = getComputedStyle(el);
-          return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
-        };
-        const clickables = Array.from(document.querySelectorAll("button, [role='button'], a, [role='menuitem']"))
-          .filter(vis)
-          .map((b) => ({
-            t: (b.innerText || "").trim().replace(/\s+/g, " ").slice(0, 40),
-            a: (b.getAttribute("aria-label") || "").slice(0, 40),
-          }))
-          .filter((x) => x.t || x.a)
-          .slice(0, 60);
-        return {
-          composerEditors: Array.from(document.querySelectorAll('[contenteditable="true"]')).filter(vis).length,
-          dialogs: Array.from(document.querySelectorAll('[role="dialog"]')).filter(vis).length,
-          bodyHead: (document.body.innerText || "").replace(/\s+/g, " ").slice(0, 300),
-          clickables,
-        };
-      });
-      log.info("bridge", "appendAgentMessage diag", { sessionId: state.id, composerReady, diag });
-    } catch (e) {
-      log.warn("bridge", "appendAgentMessage diag failed", { message: String((e && e.message) || e) });
     }
     try {
       await editor.waitFor({ state: "visible", timeout: 60_000 });
