@@ -24,24 +24,24 @@
   </style>
   <rect x="0.5" y="0.5" width="959" height="599" rx="16" class="bg"/>
   <text x="54" y="48" class="title">Repository Traffic</text>
-  <text x="54" y="69" class="subtitle">Since 2026-09-16 · 26 daily records retained</text>
+  <text x="54" y="69" class="subtitle">Since 2026-09-16 · 27 daily records retained</text>
 
   <g>
     <rect x="54" y="94" width="198" height="92" rx="12" class="card"/>
     <text x="72" y="121" class="card-label">VIEWS · 14 DAYS</text>
-    <text x="72" y="153" class="card-value">1,544</text>
+    <text x="72" y="153" class="card-value">1,433</text>
 
     <rect x="264" y="94" width="198" height="92" rx="12" class="card"/>
     <text x="282" y="121" class="card-label">UNIQUE VISITORS</text>
-    <text x="282" y="153" class="card-value">349</text>
+    <text x="282" y="153" class="card-value">335</text>
 
     <rect x="474" y="94" width="198" height="92" rx="12" class="card"/>
     <text x="492" y="121" class="card-label">CLONES · 14 DAYS</text>
-    <text x="492" y="153" class="card-value">1,543</text>
+    <text x="492" y="153" class="card-value">1,443</text>
 
     <rect x="684" y="94" width="222" height="92" rx="12" class="card"/>
     <text x="702" y="121" class="card-label">UNIQUE CLONERS</text>
-    <text x="702" y="153" class="card-value">569</text>
+    <text x="702" y="153" class="card-value">546</text>
   </g>
 
 
@@ -63,8 +63,8 @@
       <line x1="92" y1="232.0" x2="906.0" y2="232.0" class="grid"/>
       <text x="82.0" y="235.0" text-anchor="end" class="scale">500</text>
 
-    <path d="M 92.0 358.0 L 124.6 358.0 L 157.1 358.0 L 189.7 358.0 L 222.2 358.0 L 254.8 358.0 L 287.4 357.7 L 319.9 350.7 L 352.5 347.4 L 385.0 358.0 L 417.6 355.5 L 450.2 351.4 L 482.7 316.4 L 515.3 275.8 L 547.8 314.2 L 580.4 303.6 L 613.0 331.5 L 645.5 322.7 L 678.1 339.6 L 710.6 346.2 L 743.2 338.3 L 775.8 350.2 L 808.3 346.7 L 840.9 347.2 L 873.4 341.1 L 906.0 349.4 L 906.0 358.0 L 92 358.0 Z" class="area"/>
-    <path d="M 92.0 358.0 L 124.6 358.0 L 157.1 358.0 L 189.7 358.0 L 222.2 358.0 L 254.8 358.0 L 287.4 357.7 L 319.9 350.7 L 352.5 347.4 L 385.0 358.0 L 417.6 355.5 L 450.2 351.4 L 482.7 316.4 L 515.3 275.8 L 547.8 314.2 L 580.4 303.6 L 613.0 331.5 L 645.5 322.7 L 678.1 339.6 L 710.6 346.2 L 743.2 338.3 L 775.8 350.2 L 808.3 346.7 L 840.9 347.2 L 873.4 341.1 L 906.0 349.4" class="line"/>
+    <path d="M 92.0 358.0 L 123.3 358.0 L 154.6 358.0 L 185.9 358.0 L 217.2 358.0 L 248.5 358.0 L 279.8 357.7 L 311.2 350.7 L 342.5 347.4 L 373.8 358.0 L 405.1 355.5 L 436.4 351.4 L 467.7 316.4 L 499.0 275.8 L 530.3 314.2 L 561.6 303.6 L 592.9 331.5 L 624.2 322.7 L 655.5 339.6 L 686.8 346.2 L 718.2 338.3 L 749.5 350.2 L 780.8 346.7 L 812.1 347.2 L 843.4 341.1 L 874.7 349.4 L 906.0 344.4 L 906.0 358.0 L 92 358.0 Z" class="area"/>
+    <path d="M 92.0 358.0 L 123.3 358.0 L 154.6 358.0 L 185.9 358.0 L 217.2 358.0 L 248.5 358.0 L 279.8 357.7 L 311.2 350.7 L 342.5 347.4 L 373.8 358.0 L 405.1 355.5 L 436.4 351.4 L 467.7 316.4 L 499.0 275.8 L 530.3 314.2 L 561.6 303.6 L 592.9 331.5 L 624.2 322.7 L 655.5 339.6 L 686.8 346.2 L 718.2 338.3 L 749.5 350.2 L 780.8 346.7 L 812.1 347.2 L 843.4 341.1 L 874.7 349.4 L 906.0 344.4" class="line"/>
 
     <text x="92" y="410" class="panel-title">Clones</text>
     <text x="92" y="426" class="panel-subtitle">Daily repository clones</text>
@@ -84,9 +84,9 @@
       <line x1="92" y1="432.0" x2="906.0" y2="432.0" class="grid"/>
       <text x="82.0" y="435.0" text-anchor="end" class="scale">500</text>
 
-    <path d="M 92.0 558.0 L 124.6 558.0 L 157.1 558.0 L 189.7 558.0 L 222.2 558.0 L 254.8 558.0 L 287.4 552.7 L 319.9 544.9 L 352.5 495.5 L 385.0 548.2 L 417.6 547.2 L 450.2 555.7 L 482.7 526.5 L 515.3 471.8 L 547.8 449.1 L 580.4 539.9 L 613.0 527.5 L 645.5 502.3 L 678.1 542.4 L 710.6 550.9 L 743.2 552.2 L 775.8 550.4 L 808.3 554.2 L 840.9 552.2 L 873.4 552.5 L 906.0 551.2 L 906.0 558.0 L 92 558.0 Z" class="area"/>
-    <path d="M 92.0 558.0 L 124.6 558.0 L 157.1 558.0 L 189.7 558.0 L 222.2 558.0 L 254.8 558.0 L 287.4 552.7 L 319.9 544.9 L 352.5 495.5 L 385.0 548.2 L 417.6 547.2 L 450.2 555.7 L 482.7 526.5 L 515.3 471.8 L 547.8 449.1 L 580.4 539.9 L 613.0 527.5 L 645.5 502.3 L 678.1 542.4 L 710.6 550.9 L 743.2 552.2 L 775.8 550.4 L 808.3 554.2 L 840.9 552.2 L 873.4 552.5 L 906.0 551.2" class="line"/>
-  <text x="92.0" y="578" text-anchor="start" class="axis">2026-09-16</text><text x="482.7" y="578" text-anchor="middle" class="axis">2026-09-28</text><text x="906.0" y="578" text-anchor="end" class="axis">2026-10-11</text>
+    <path d="M 92.0 558.0 L 123.3 558.0 L 154.6 558.0 L 185.9 558.0 L 217.2 558.0 L 248.5 558.0 L 279.8 552.7 L 311.2 544.9 L 342.5 495.5 L 373.8 548.2 L 405.1 547.2 L 436.4 555.7 L 467.7 526.5 L 499.0 471.8 L 530.3 449.1 L 561.6 539.9 L 592.9 527.5 L 624.2 502.3 L 655.5 542.4 L 686.8 550.9 L 718.2 552.2 L 749.5 550.4 L 780.8 554.2 L 812.1 552.2 L 843.4 552.5 L 874.7 551.2 L 906.0 551.7 L 906.0 558.0 L 92 558.0 Z" class="area"/>
+    <path d="M 92.0 558.0 L 123.3 558.0 L 154.6 558.0 L 185.9 558.0 L 217.2 558.0 L 248.5 558.0 L 279.8 552.7 L 311.2 544.9 L 342.5 495.5 L 373.8 548.2 L 405.1 547.2 L 436.4 555.7 L 467.7 526.5 L 499.0 471.8 L 530.3 449.1 L 561.6 539.9 L 592.9 527.5 L 624.2 502.3 L 655.5 542.4 L 686.8 550.9 L 718.2 552.2 L 749.5 550.4 L 780.8 554.2 L 812.1 552.2 L 843.4 552.5 L 874.7 551.2 L 906.0 551.7" class="line"/>
+  <text x="92.0" y="578" text-anchor="start" class="axis">2026-09-16</text><text x="499.0" y="578" text-anchor="middle" class="axis">2026-09-29</text><text x="906.0" y="578" text-anchor="end" class="axis">2026-10-12</text>
 
   <text x="54" y="594" class="footer">Source: GitHub Repository Traffic API · daily history retained by this repository</text>
 </svg>
