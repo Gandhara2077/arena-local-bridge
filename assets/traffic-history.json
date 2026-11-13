@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-12T09:53:41.984Z",
+  "updated_at": "2026-11-13T09:36:41.675Z",
   "days": [
     {
       "date": "2026-09-16",
@@ -400,16 +400,23 @@
       "unique_views": 20,
       "clones": 22,
       "unique_clones": 18
+    },
+    {
+      "date": "2026-11-12",
+      "views": 33,
+      "unique_views": 22,
+      "clones": 17,
+      "unique_clones": 15
     }
   ],
   "latest_14_days": {
-    "captured_at": "2026-11-12T09:53:41.984Z",
+    "captured_at": "2026-11-13T09:36:41.675Z",
     "views": {
-      "count": 415,
-      "uniques": 168
+      "count": 420,
+      "uniques": 172
     },
     "clones": {
-      "count": 258,
+      "count": 254,
       "uniques": 166
     }
   }
