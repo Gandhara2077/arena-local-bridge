@@ -24,16 +24,16 @@
   </style>
   <rect x="0.5" y="0.5" width="959" height="599" rx="16" class="bg"/>
   <text x="54" y="48" class="title">Repository Traffic</text>
-  <text x="54" y="69" class="subtitle">Since 2026-09-16 · 72 daily records retained</text>
+  <text x="54" y="69" class="subtitle">Since 2026-09-16 · 73 daily records retained</text>
 
   <g>
     <rect x="54" y="94" width="198" height="92" rx="12" class="card"/>
     <text x="72" y="121" class="card-label">VIEWS · 14 DAYS</text>
-    <text x="72" y="153" class="card-value">345</text>
+    <text x="72" y="153" class="card-value">322</text>
 
     <rect x="264" y="94" width="198" height="92" rx="12" class="card"/>
     <text x="282" y="121" class="card-label">UNIQUE VISITORS</text>
-    <text x="282" y="153" class="card-value">108</text>
+    <text x="282" y="153" class="card-value">101</text>
 
     <rect x="474" y="94" width="198" height="92" rx="12" class="card"/>
     <text x="492" y="121" class="card-label">CLONES · 14 DAYS</text>
@@ -63,8 +63,8 @@
       <line x1="92" y1="232.0" x2="906.0" y2="232.0" class="grid"/>
       <text x="82.0" y="235.0" text-anchor="end" class="scale">1,000</text>
 
-    <path d="M 92.0 357.9 L 173.4 282.7 L 254.8 253.0 L 336.2 320.5 L 417.6 330.5 L 499.0 341.6 L 580.4 327.9 L 661.8 332.9 L 743.2 336.2 L 824.6 332.8 L 906.0 352.8 L 906.0 358.0 L 92 358.0 Z" class="area"/>
-    <path d="M 92.0 357.9 L 173.4 282.7 L 254.8 253.0 L 336.2 320.5 L 417.6 330.5 L 499.0 341.6 L 580.4 327.9 L 661.8 332.9 L 743.2 336.2 L 824.6 332.8 L 906.0 352.8" class="line"/>
+    <path d="M 92.0 357.9 L 173.4 282.7 L 254.8 253.0 L 336.2 320.5 L 417.6 330.5 L 499.0 341.6 L 580.4 327.9 L 661.8 332.9 L 743.2 336.2 L 824.6 332.8 L 906.0 351.8 L 906.0 358.0 L 92 358.0 Z" class="area"/>
+    <path d="M 92.0 357.9 L 173.4 282.7 L 254.8 253.0 L 336.2 320.5 L 417.6 330.5 L 499.0 341.6 L 580.4 327.9 L 661.8 332.9 L 743.2 336.2 L 824.6 332.8 L 906.0 351.8" class="line"/>
 
     <text x="92" y="410" class="panel-title">Clones</text>
     <text x="92" y="426" class="panel-subtitle">Weekly totals repository clones</text>
@@ -84,8 +84,8 @@
       <line x1="92" y1="432.0" x2="906.0" y2="432.0" class="grid"/>
       <text x="82.0" y="435.0" text-anchor="end" class="scale">1,000</text>
 
-    <path d="M 92.0 555.4 L 173.4 449.9 L 254.8 437.2 L 336.2 539.0 L 417.6 542.1 L 499.0 539.6 L 580.4 544.0 L 661.8 541.1 L 743.2 543.4 L 824.6 488.4 L 906.0 553.6 L 906.0 558.0 L 92 558.0 Z" class="area"/>
-    <path d="M 92.0 555.4 L 173.4 449.9 L 254.8 437.2 L 336.2 539.0 L 417.6 542.1 L 499.0 539.6 L 580.4 544.0 L 661.8 541.1 L 743.2 543.4 L 824.6 488.4 L 906.0 553.6" class="line"/>
+    <path d="M 92.0 555.4 L 173.4 449.9 L 254.8 437.2 L 336.2 539.0 L 417.6 542.1 L 499.0 539.6 L 580.4 544.0 L 661.8 541.1 L 743.2 543.4 L 824.6 488.4 L 906.0 552.8 L 906.0 558.0 L 92 558.0 Z" class="area"/>
+    <path d="M 92.0 555.4 L 173.4 449.9 L 254.8 437.2 L 336.2 539.0 L 417.6 542.1 L 499.0 539.6 L 580.4 544.0 L 661.8 541.1 L 743.2 543.4 L 824.6 488.4 L 906.0 552.8" class="line"/>
   <text x="92.0" y="578" text-anchor="start" class="axis">2026-09-16</text><text x="499.0" y="578" text-anchor="middle" class="axis">2026-10-21</text><text x="906.0" y="578" text-anchor="end" class="axis">2026-11-25</text>
 
   <text x="54" y="594" class="footer">Source: GitHub Repository Traffic API · daily history retained by this repository</text>
